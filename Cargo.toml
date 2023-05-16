@@ -1,0 +1,20 @@
+[package]
+name = "rusty_genes"
+description = "A library for implementing and executing evolutionary algorithms with customizable models."
+authors = ["Kambiz Khojasteh"]
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+readme = "README.md"
+
+[dependencies]
+rayon = "1.6.1"
+rand = { version = "0.8.5", features = ["small_rng"] }
+object-pool = "0.5.4"
+
+[dev-dependencies]
+criterion = { version = "0.4.0", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmarks"
+harness = false
