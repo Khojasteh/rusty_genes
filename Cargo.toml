@@ -6,6 +6,8 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/Khojasteh/rusty_genes"
+documentation = "https://docs.rs/rusty_genes/0.1.0"
 
 [dependencies]
 rayon = "1.6.1"
