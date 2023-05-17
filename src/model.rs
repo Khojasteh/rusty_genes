@@ -177,9 +177,7 @@ pub trait EvolutionModel: Sync {
         self.improve(&mut offspring);
         self.evaluate(&mut offspring);
 
-        if offspring.is_valid()
-            && self.can_survive(&offspring, fittest_parent, population.stats(), rng)
-        {
+        if offspring.is_valid() && self.can_survive(&offspring, fittest_parent, population, rng) {
             offspring
         } else {
             fittest_parent.clone()
@@ -190,9 +188,8 @@ pub trait EvolutionModel: Sync {
     ///
     /// # Arguments
     /// * `offspring` - A reference to the offspring individual.
-    /// * `parent` - A reference to the fittest parent of the offspring.
-    /// * `population_fitness` - A reference to the statistical data of the current
-    ///   population's fitness.
+    /// * `fittest_parent` - A reference to the fittest parent of the offspring.
+    /// * `population` - A reference to the the current population.
     /// * `rng` - A mutable reference to a random number generator.
     ///
     /// # Returns
@@ -209,11 +206,11 @@ pub trait EvolutionModel: Sync {
     fn can_survive(
         &self,
         offspring: &Self::Individual,
-        parent: &Self::Individual,
-        _population_fitness: &PopulatedStats,
+        fittest_parent: &Self::Individual,
+        _population: &Population<Self::Individual>,
         _rng: &mut Self::Rng,
     ) -> bool {
-        offspring.fitness() > parent.fitness()
+        offspring.fitness() >= fittest_parent.fitness()
     }
 
     /// Extends a population with randomly generated individuals.

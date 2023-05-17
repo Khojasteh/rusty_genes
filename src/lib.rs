@@ -66,8 +66,8 @@ pub fn interpolate_usize(min: usize, max: usize, ratio: f64) -> usize {
 
 /// This module provides an implementation of the OneMax problem for use with the evolutionary
 /// algorithm framework. The OneMax problem is a simple problem often used in the field of
-/// genetic algorithms to test new techniques. The problem consists of maximizing the ratio
-/// of 'true' bits in a binary string.
+/// genetic algorithms to test new techniques. The problem consists of maximizing the number
+/// of '1' bits in a binary string.
 pub mod one_max {
     use super::*;
     use rand::{distributions::Standard, prelude::*};

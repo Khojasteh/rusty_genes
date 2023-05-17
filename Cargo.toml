@@ -2,7 +2,7 @@
 name = "rusty_genes"
 description = "A library for implementing and executing evolutionary algorithms with customizable models."
 authors = ["Kambiz Khojasteh"]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 readme = "README.md"
