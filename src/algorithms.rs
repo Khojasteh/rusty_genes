@@ -210,8 +210,7 @@ pub trait EvolutionAlgorithm<M: EvolutionModel> {
         rng_pool: &Pool<M::Rng>,
     ) {
         let (breeding_parameters, offspring_size) = self.reproduction_parameters();
-
-        match offspring_size {
+        match offspring_size.saturating_sub(offspring.len()) {
             0 => {}
             1 => {
                 let mut rng = rng_pool.pull(M::rng);
