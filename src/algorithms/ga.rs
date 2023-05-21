@@ -56,6 +56,14 @@ pub struct GeneticAlgorithmParameters {
 }
 
 impl Default for GeneticAlgorithmParameters {
+    /// Creates an instance of [`GeneticAlgorithmParameters`] with default values.
+    ///
+    /// # Default Values
+    /// * population_size: 100
+    /// * elitism_rate: 0.01
+    /// * crossover_rate: 0.8
+    /// * mutation_rate: 0.1
+    /// * selection_strategy: [`SelectionStrategy::RouletteWheel`]
     fn default() -> Self {
         Self {
             population_size: 100,

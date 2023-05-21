@@ -201,6 +201,11 @@ pub trait EvolutionAlgorithm<M: EvolutionModel> {
     ///
     /// * Adding the newly bred individuals to the offspring vector.
     ///
+    /// Please note that the `offspring` vector may already contain elite individuals. These are individuals
+    /// from the current population that have been directly copied to the next generation due to their high
+    /// fitness. They bypass the typical processes of selection, crossover, and mutation to preserve their
+    /// advantageous genetic material.
+    ///
     /// This method has a default implementation that uses parallel processing for efficient generation of new
     /// individuals.
     fn generate_new_population(

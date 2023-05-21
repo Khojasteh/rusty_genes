@@ -63,6 +63,15 @@ pub struct AdaptiveGeneticAlgorithmParameters {
 }
 
 impl Default for AdaptiveGeneticAlgorithmParameters {
+    /// Creates an instance of [`AdaptiveGeneticAlgorithmParameters`] with default values.
+    ///
+    /// # Default Values
+    /// * population_size: 100
+    /// * elitism_rate: 0.01
+    /// * crossover_rate_range: 0.3..1.0
+    /// * mutation_rate_range: 0.1..1.0,
+    /// * selection_strategy: [`SelectionStrategy::RouletteWheel`]
+    /// * parameter_adjustment_interval: 1
     fn default() -> Self {
         Self {
             population_size: 100,
