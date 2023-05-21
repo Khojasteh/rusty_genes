@@ -27,17 +27,16 @@ pub enum MutationStrategy {
     /// large changes in the solution, balancing exploration and exploitation in the search process.
     Inversion,
 
-    /// Insertion Mutation selects a gene randomly from the genome and moves it to another
-    /// random position in the genome. This mutation operator can introduce a small local rearrangement
-    /// of genes, and is particularly useful in permutation-based problems where the ordering of genes
-    /// is important.
+    /// Insertion Mutation selects a gene randomly from the genome and moves it to another position.
+    /// This mutation operator can introduce a small local rearrangement of genes, and is particularly
+    /// useful in permutation-based problems where the ordering of genes is important.
     Insertion,
 
     /// Duplicate Mutation selects a gene randomly from the genome and copies its value to another
-    /// random position in the genome, replacing the gene that was previously there. This mutation
-    /// operator can introduce variation into the genome, and can be useful in problems where
-    /// duplications of certain genes may lead to a better solution. Note that this mutation is
-    /// not applicable to permutation-based problems where each gene should be unique.
+    /// position, replacing the gene that was previously there. This mutation operator can introduce
+    /// variation into the genome, and can be useful in problems where duplications of certain genes
+    /// may lead to a better solution. Note that this mutation is not applicable to permutation-based
+    /// problems where each gene should be unique.
     Duplicate,
 }
 
