@@ -127,8 +127,8 @@ pub fn benchmark(c: &mut Criterion) {
         b.iter(|| Stats::from_iter((0..1000000).map(|i| i as f64)))
     });
 
-    benchmark_crossover_strategies(c.benchmark_group("Crossover Strategies (1K genes)"), 1000);
-    benchmark_mutation_strategies(c.benchmark_group("Mutation Strategies (1K genes)"), 1000);
+    benchmark_crossover_strategies(c.benchmark_group("Crossover (1K genes)"), 1000);
+    benchmark_mutation_strategies(c.benchmark_group("Mutation (1K genes)"), 1000);
 }
 
 criterion_group!(benches, benchmark);
