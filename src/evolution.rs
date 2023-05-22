@@ -148,7 +148,7 @@ where
             .initialize_population(initial_population);
 
         // Initialize iterations
-        let mut new_population = Vec::with_capacity(population.capacity());
+        let mut new_population = Vec::with_capacity(parameters.max_population_size());
         let pool = Pool::new(rayon::current_num_threads(), M::rng);
 
         // Start iterations

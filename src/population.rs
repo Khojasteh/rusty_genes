@@ -1,6 +1,6 @@
 use super::*;
 use rayon::prelude::*;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 
 /// Represents a population of individuals in an evolutionary algorithm.
 ///
@@ -100,18 +100,11 @@ impl<I: Individual> Population<I> {
 }
 
 impl<I: Individual> Deref for Population<I> {
-    type Target = Vec<I>;
+    type Target = [I];
 
     #[inline]
     fn deref(&self) -> &Self::Target {
         &self.individuals
-    }
-}
-
-impl<I: Individual> DerefMut for Population<I> {
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.individuals
     }
 }
 
