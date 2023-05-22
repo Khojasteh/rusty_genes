@@ -50,6 +50,7 @@ impl MutationStrategy {
     ///
     /// # Note
     /// The mutation operation directly modifies the `genome` in place.
+    #[inline]
     pub fn mutate<G: Copy, R: Rng>(&self, genome: &mut [G], rng: &mut R) {
         match self {
             Self::Swap => swap_mutation(genome, rng),
@@ -196,6 +197,7 @@ pub fn inversion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 ///
 /// assert_eq!(genome, vec![0, 1, 6, 2, 3, 4, 5, 7, 8, 9]);
 /// ```
+#[inline]
 pub fn insertion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
     let n = genome.len();
     if n < 2 {
@@ -235,6 +237,7 @@ pub fn insertion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 ///
 /// assert_eq!(genome, vec!['G', 'T', 'A', 'A', 'C']);
 /// ```
+#[inline]
 pub fn duplicate_mutation<G: Copy, R: Rng>(genome: &mut [G], rng: &mut R) {
     let n = genome.len();
     if n < 2 {
