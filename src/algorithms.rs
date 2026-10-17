@@ -1,5 +1,4 @@
 use super::*;
-use object_pool::Pool;
 use rayon::prelude::*;
 
 mod ga;
@@ -8,247 +7,366 @@ pub use ga::*;
 mod aga;
 pub use aga::*;
 
-/// Defines the minimum set of parameters required for an evolutionary algorithm.
-///
-/// This trait abstracts the concept of parameters for an evolutionary algorithm. Any type that implements
-/// this trait can be used as a set of parameters for an evolutionary algorithm.
-///
-/// Implementations of this trait provide a way to control the key parameters of an evolutionary algorithm.
-/// These parameters can greatly affect the performance and results of the algorithm.
-pub trait EvolutionParameters {
-    /// Returns the size of the initial population of individuals at the start of the evolutionary
-    /// algorithm.
-    ///
-    /// The initial population provides the genetic diversity from which the algorithm
-    /// evolves solutions to the problem.
-    fn initial_population_size(&self) -> usize;
-
-    /// Returns the maximum size of the population in any generation of the evolutionary algorithm.
-    ///
-    /// Maintaining an upper limit on the size of the population can be useful for controlling the
-    /// computational resources used by the algorithm.
-    fn max_population_size(&self) -> usize;
-
-    /// Validates the parameters.
-    ///
-    /// # Panics
-    /// This method will panic if any parameter is invalid.
-    fn validate(&self);
-}
+/// The type of individual evolved by an evolutionary algorithm `A`.
+pub type IndividualOf<A> = <<A as EvolutionAlgorithm>::Model as EvolutionModel>::Individual;
 
 /// Represents the core mechanism of an evolutionary algorithm.
 ///
 /// # Note
-/// This trait abstracts the fundamental tasks that an evolutionary algorithm performs.
-/// The tasks include the configuration of the algorithm, selection of elites, initialization
-/// of the population, and the generation of new populations.
-pub trait EvolutionAlgorithm<M: EvolutionModel> {
-    /// The type of parameters used for configuring the evolutionary algorithm.
-    type Parameters: EvolutionParameters;
-
-    /// Builds an [`Evolution`] instance by binding the evolutionary algorithm with the given model.
-    ///
-    /// # Arguments
-    /// * `model` - The evolutionary model that will be employed by the algorithm.
-    ///
-    /// # Returns
-    /// An [`Evolution`] instance that binds the evolutionary algorithm with the given model.
-    ///
-    /// # Note
-    /// This method is an associated function of the [`EvolutionAlgorithm`] trait. It creates an [`Evolution`]
-    /// instance, which is a wrapper around the evolutionary algorithm. The [`Evolution`] instance is necessary
-    /// to run the algorithm.
-    fn build_evolution(model: M) -> Evolution<Self, M>
-    where
-        Self: From<M> + Sized,
-    {
-        Evolution::from(Self::from(model))
-    }
+/// This trait defines the steps of a generation: preparing the algorithm, carrying elites over,
+/// breeding offspring, and replacing the population. [`Evolution`] drives these steps from one
+/// generation to the next, so an algorithm is usually run by converting it into an [`Evolution`]
+/// with [`into_evolution`](EvolutionAlgorithm::into_evolution).
+///
+/// A [`Reproduction`] provides the breeding step of the algorithms of this library, and can be
+/// reused by other algorithms.
+pub trait EvolutionAlgorithm {
+    /// The evolutionary model the algorithm operates on.
+    type Model: EvolutionModel;
 
     /// Returns a reference to the evolutionary model used by the algorithm.
-    fn model(&self) -> &M;
+    fn model(&self) -> &Self::Model;
 
-    /// Retrieves the reproduction parameters for the evolutionary model.
-    ///
-    /// # Returns
-    /// A tuple where the first element is a reference to a `ReproductionParameters` struct and the second
-    /// element is the target size of the new population.
-    ///
-    /// The `ReproductionParameters` struct includes the crossover rate, mutation rate, and the selection
-    /// mechanism used in the model.
-    ///
-    /// The size of the new population represents the total number of individuals in the population after
-    /// the reproductive process.
-    ///
-    /// # Note
-    /// This method is typically used to access and potentially modify the reproduction parameters during the
-    /// evolution process. The size of the new population can be used to understand the scale of the evolution
-    /// process.
-    fn reproduction_parameters(&self) -> (&ReproductionParameters<M>, usize);
+    /// Returns the number of individuals in a full generation.
+    fn population_size(&self) -> usize;
 
-    /// Configures the evolutionary algorithm using the specified parameters.
-    ///
-    /// # Arguments
-    /// * `parameters` - A reference to an instance of the `Parameters` type, which contains the necessary
-    ///   configuration for the evolutionary algorithm.
-    ///
-    /// # Note
-    /// This method is used to set up the evolutionary algorithm according to the provided parameters. The
-    /// parameters may include, but are not limited to:
-    ///
-    /// * Reproduction parameters like crossover and mutation rates
-    /// * Selection mechanisms
-    /// * Population size
-    /// * Other algorithm-specific configurations
-    ///
-    /// The configuration process is typically done before the evolution process begins, and it's crucial
-    /// in tailoring the algorithm to the specific problem at hand.
-    ///
-    /// # Panics
-    /// This method will panic if any parameter is invalid. Different implementations may have different
-    /// definitions of what constitutes a valid parameter.
-    fn configure(&mut self, parameters: &Self::Parameters);
-
-    /// Performs elitism on the population by selecting a subset of the fittest individuals and adding them
-    /// to the elites.
-    ///
-    /// Elitism is a process in genetic algorithms where a portion of the fittest individuals
-    /// from the current generation is carried over to the next generation. This helps to ensure
-    /// that the most successful individuals, or "elites", are not lost due to crossover and mutation.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the current population.
-    /// * `elites` - A mutable reference to a vector where the selected elite individuals will be added.
-    ///
-    /// # Note
-    /// This method is responsible for selecting the elite individuals from the given population
-    /// and adding them to the `elites` vector. The method of selection is left to the specific
-    /// implementation.
-    ///
-    /// The implementation of this method should ensure that the size of the `elites` vector
-    /// does not exceed the allowed number of elite individuals. This number is typically
-    /// defined as a percentage of the total population size.
-    ///
-    /// This method has a default implementation that adds the fittest individual in the population to
-    /// the elites.
-    fn select_elites(
-        &self,
-        population: &Population<M::Individual>,
-        elites: &mut Vec<M::Individual>,
-    ) {
-        elites.push(population.fittest().clone())
+    /// Converts the algorithm into an [`Evolution`] that runs it.
+    fn into_evolution(self) -> Evolution<Self>
+    where
+        Self: Sized,
+    {
+        Evolution::new(self)
     }
 
     /// Prepares the initial population for the evolutionary process.
     ///
     /// # Arguments
-    /// * `individuals` - A vector containing the individuals in the initial population.
+    /// * `individuals` - The individuals of the initial population.
     ///
     /// # Note
-    /// This method is responsible for preparing the initial population for the algorithm. Its tasks include,
-    /// but are not limited to:
+    /// The default implementation evaluates the fitness of each individual in parallel and
+    /// creates a [`Population`] from them, which discards the invalid individuals.
     ///
-    /// * Evaluating the fitness of each individual in the population. Each individual is assigned a floating-point
-    ///   fitness score that represents how well it solves or performs in the task or problem being optimized.
-    ///
-    /// * Removing invalid individuals from the population. Invalid individuals might be those that do not comply
-    ///   with certain constraints or requirements of the problem being solved.
-    ///
-    /// An individual with a higher fitness score is considered to be a better fit. The algorithm tries to
-    /// maximize the fitness score of the individuals in the population in order to find optimal solutions
-    /// to the problem being optimized.
-    ///
-    /// This method has a default implementation that performs the described tasks.
-    ///
-    /// # Panics
-    /// This method should/will panic when there is no valid individual in the initial population.
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if there is no valid individual.
     fn initialize_population(
-        &self,
-        mut individuals: Vec<M::Individual>,
-    ) -> Population<M::Individual> {
+        &mut self,
+        mut individuals: Vec<IndividualOf<Self>>,
+    ) -> Result<Population<IndividualOf<Self>>, EvolutionError> {
+        let model = self.model();
         individuals
             .par_iter_mut()
-            .for_each_with(self.model(), |model, individual| model.evaluate(individual));
-        individuals.retain(|individual| individual.is_valid());
-
+            .for_each(|individual| model.evaluate(individual));
         Population::new(individuals)
     }
 
-    /// Prepares the evolutionary algorithm for the next generation.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the current population.
+    /// Prepares the algorithm for breeding the next generation from `population`.
     ///
     /// # Note
-    /// This method is responsible for preparing the evolutionary algorithm for the generation of the next
-    /// population. It could involve operations such as adjusting algorithm parameters, preparing the selection
-    /// strategy, etc.
-    fn prepare_for_next_population(&mut self, population: &Population<M::Individual>);
+    /// This method is called once per generation, before any other step of the generation. When
+    /// the generation number of `population` is zero, a new run starts, and the algorithm should
+    /// reset any state it adapts during a run.
+    ///
+    /// The algorithm is also responsible for calling [`EvolutionModel::prepare`] on its model.
+    fn prepare_generation(&mut self, population: &Population<IndividualOf<Self>>);
 
-    /// Generates the new generation of individuals.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the current population.
-    /// * `offspring` - A mutable reference to a vector of offspring individuals.
-    /// * `rng_pool` - A pool of random number generators used for stochastic aspects of the evolution process.
+    /// Carries the elite individuals of `population` over to the next generation by adding them
+    /// to `elites`.
     ///
     /// # Note
-    /// This method is responsible for generating the new population in the evolutionary process. Its tasks
-    /// include, but are not limited to:
-    ///
-    /// * Breeding new individuals based on the current population. This typically involves processes such as
-    ///   selection, crossover, and mutation.
-    ///
-    /// * Adding the newly bred individuals to the offspring vector.
-    ///
-    /// Please note that the `offspring` vector may already contain elite individuals. These are individuals
-    /// from the current population that have been directly copied to the next generation due to their high
-    /// fitness. They bypass the typical processes of selection, crossover, and mutation to preserve their
-    /// advantageous genetic material.
-    ///
-    /// This method has a default implementation that uses parallel processing for efficient generation of new
-    /// individuals.
-    fn generate_new_population(
+    /// The default implementation adds the fittest individual.
+    fn select_elites(
         &self,
-        population: &Population<M::Individual>,
-        offspring: &mut Vec<M::Individual>,
-        rng_pool: &Pool<M::Rng>,
+        population: &Population<IndividualOf<Self>>,
+        elites: &mut Vec<IndividualOf<Self>>,
     ) {
-        let (breeding_parameters, offspring_size) = self.reproduction_parameters();
-        match offspring_size.saturating_sub(offspring.len()) {
-            0 => {}
-            1 => {
-                let mut rng = rng_pool.pull(M::rng);
-                self.model()
-                    .breed(population, breeding_parameters, &mut *rng);
-            }
-            size => {
-                offspring.par_extend(rayon::iter::repeatn(self.model(), size).map_init(
-                    || rng_pool.pull(M::rng),
-                    |rng, model| model.breed(population, breeding_parameters, &mut *rng),
-                ));
-            }
-        }
+        elites.push(population.fittest().clone());
     }
 
-    /// Replaces the current population with the new one generated from the offspring.
+    /// Breeds new individuals from `population` and adds them to `offspring` until it holds
+    /// [`population_size`](EvolutionAlgorithm::population_size) individuals.
     ///
     /// # Arguments
-    /// * `population` - A mutable reference to the current population to be replaced.
-    /// * `offspring` - A mutable reference to the vector of offspring individuals.
+    /// * `population` - The current population.
+    /// * `offspring` - The individuals of the next generation, which may already hold its elites.
+    /// * `rng` - A mutable reference to the random number generator of the run.
     ///
     /// # Note
-    /// This method is responsible for replacing the current population with the newly generated offspring.
-    /// The replacement strategy can significantly impact the performance and characteristics of the
-    /// evolutionary algorithm.
+    /// For a run to be reproducible from its seed, the offspring must depend only on the state
+    /// of `rng`, for example by breeding each offspring with its own generator of [`Rng::split`],
+    /// as [`Reproduction::breed_into`] does.
+    fn generate_offspring(
+        &self,
+        population: &Population<IndividualOf<Self>>,
+        offspring: &mut Vec<IndividualOf<Self>>,
+        rng: &mut Rng,
+    );
+
+    /// Replaces the current population with the new generation in `offspring`.
     ///
-    /// This method has a default implementation that replaces the entire old population with the offspring.
+    /// # Note
+    /// The default implementation replaces the whole population by [`Population::replace`].
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if the new generation has no valid individual.
     #[inline]
     fn replace_population(
         &self,
-        population: &mut Population<M::Individual>,
-        offspring: &mut Vec<M::Individual>,
-    ) {
-        population.replace(offspring);
+        population: &mut Population<IndividualOf<Self>>,
+        offspring: &mut Vec<IndividualOf<Self>>,
+    ) -> Result<(), EvolutionError> {
+        population.replace(offspring)
+    }
+}
+
+/// Returns the number of elites for a population of the given size and elitism rate.
+#[inline]
+fn elite_count(population_size: usize, elitism_rate: f64) -> usize {
+    interpolate_usize(0, population_size, elitism_rate)
+}
+
+/// Adds up to `count` of the fittest individuals of `population` to `elites`.
+#[inline]
+fn select_fittest<I: Individual>(population: &Population<I>, count: usize, elites: &mut Vec<I>) {
+    let start = population.len().saturating_sub(count);
+    elites.extend_from_slice(&population[start..]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::one_max::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn ga_parameters(population_size: usize, elitism_rate: f64) -> GeneticAlgorithmParameters {
+        GeneticAlgorithmParameters {
+            population_size,
+            elitism_rate,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn algorithms_and_evolutions_can_be_sent_to_other_threads() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Evolution<GeneticAlgorithm<OneMaxEvolutionModel>>>();
+        assert_send::<Evolution<AdaptiveGeneticAlgorithm<OneMaxEvolutionModel>>>();
+    }
+
+    #[test]
+    fn ga_with_single_individual_population_evolves() {
+        let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, ga_parameters(1, 0.0))
+            .unwrap()
+            .into_evolution();
+
+        let population = evolution
+            .evolve_population(vec![OneMax::from(vec![false; 8])], |p| p.generation() < 50)
+            .unwrap();
+
+        assert_eq!(population.generation(), 50);
+        assert_eq!(population.len(), 1);
+    }
+
+    #[test]
+    fn ga_breeds_the_last_free_slot_of_a_generation() {
+        let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, ga_parameters(4, 0.75)).unwrap();
+        let initial = (0..4)
+            .map(|i| OneMax::from((0..8).map(|bit| bit < i).collect::<Vec<_>>()))
+            .collect();
+        let population = ga.initialize_population(initial).unwrap();
+        ga.prepare_generation(&population);
+
+        let mut offspring = Vec::new();
+        ga.select_elites(&population, &mut offspring);
+        assert_eq!(offspring.len(), 3);
+
+        ga.generate_offspring(&population, &mut offspring, &mut Rng::from_seed(0));
+        assert_eq!(offspring.len(), 4);
+    }
+
+    #[test]
+    fn ga_rejects_invalid_parameters() {
+        let invalid = [
+            GeneticAlgorithmParameters {
+                population_size: 0,
+                ..Default::default()
+            },
+            GeneticAlgorithmParameters {
+                elitism_rate: 1.0,
+                ..Default::default()
+            },
+            GeneticAlgorithmParameters {
+                crossover_rate: 1.5,
+                ..Default::default()
+            },
+            GeneticAlgorithmParameters {
+                mutation_rate: f64::NAN,
+                ..Default::default()
+            },
+            GeneticAlgorithmParameters {
+                selection_strategy: SelectionStrategy::Tournament(0),
+                ..Default::default()
+            },
+        ];
+
+        for parameters in invalid {
+            assert!(matches!(
+                GeneticAlgorithm::new(OneMaxEvolutionModel, parameters),
+                Err(EvolutionError::InvalidParameter { .. })
+            ));
+        }
+    }
+
+    /// A selector that selects the fittest individual and counts its selections.
+    struct CountingSelector(Arc<AtomicUsize>);
+
+    impl SelectionMechanism<OneMax> for CountingSelector {
+        fn prepare(&mut self, _: &Population<OneMax>) {}
+
+        fn select<'a>(
+            &self,
+            population: &'a Population<OneMax>,
+            _: &mut Rng,
+        ) -> (usize, &'a OneMax) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            let index = population.len() - 1;
+            (index, &population[index])
+        }
+    }
+
+    #[test]
+    fn a_custom_selector_is_used_in_every_run() {
+        let selections = Arc::new(AtomicUsize::new(0));
+        let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, ga_parameters(10, 0.0)).unwrap();
+        ga.reproduction_mut()
+            .set_selector(CountingSelector(selections.clone()));
+        let mut evolution = ga.into_evolution();
+
+        for _ in 0..2 {
+            let before = selections.load(Ordering::Relaxed);
+            evolution.run(&8, |p| p.generation() < 3).unwrap();
+            assert!(selections.load(Ordering::Relaxed) >= before + 30);
+        }
+    }
+
+    #[test]
+    fn runs_with_the_same_seed_are_equal_on_any_number_of_threads() {
+        let run = |threads, seed| {
+            let mut evolution =
+                AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
+                    .unwrap()
+                    .into_evolution()
+                    .with_seed(seed);
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut individuals = Vec::new();
+                    evolution
+                        .run(&64, |population| {
+                            individuals = population.to_vec();
+                            population.generation() < 10
+                        })
+                        .unwrap();
+                    individuals
+                })
+        };
+
+        assert_eq!(run(1, 5), run(4, 5));
+        assert_ne!(run(4, 5), run(4, 6));
+    }
+
+    /// An individual whose fitness is the same everywhere, so the fitness of every population
+    /// has a standard deviation of zero.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Plateau(Vec<bool>);
+
+    impl Individual for Plateau {
+        fn fitness(&self) -> f64 {
+            0.0
+        }
+    }
+
+    struct PlateauModel;
+
+    impl EvolutionModel for PlateauModel {
+        type Individual = Plateau;
+
+        fn crossover(&self, parent1: &Plateau, _: &Plateau, _: &mut Rng) -> Plateau {
+            parent1.clone()
+        }
+
+        fn mutate(&self, individual: &mut Plateau, rng: &mut Rng) {
+            MutationStrategy::Swap.mutate(&mut individual.0, rng);
+        }
+
+        fn evaluate(&self, _: &mut Plateau) {}
+    }
+
+    #[test]
+    fn aga_keeps_mutating_when_fitness_has_no_spread() {
+        let parameters = AdaptiveGeneticAlgorithmParameters {
+            population_size: 2,
+            elitism_rate: 0.0,
+            ..Default::default()
+        };
+        let mut evolution = AdaptiveGeneticAlgorithm::new(PlateauModel, parameters)
+            .unwrap()
+            .into_evolution();
+        // With two genes, every swap mutation moves the set bit.
+        let mut first_bit_moved = false;
+        evolution
+            .evolve_population(vec![Plateau(vec![true, false])], |population| {
+                first_bit_moved |= population.iter().any(|p| !p.0[0]);
+                population.generation() < 5
+            })
+            .unwrap();
+
+        // Without any spread, diversity is zero: crossover is at the start of its range and
+        // mutation at the end of its range (the defaults are 0.3..=1.0 and 0.1..=1.0).
+        let reproduction = evolution.algorithm().reproduction();
+        assert_eq!(reproduction.crossover_rate(), 0.3);
+        assert!((reproduction.mutation_rate() - 1.0).abs() <= f64::EPSILON);
+        assert!(first_bit_moved);
+    }
+
+    #[test]
+    fn aga_rejects_invalid_parameters() {
+        let invalid = [
+            AdaptiveGeneticAlgorithmParameters {
+                crossover_rate_range: 0.9..=0.3,
+                ..Default::default()
+            },
+            AdaptiveGeneticAlgorithmParameters {
+                mutation_rate_range: 0.1..=1.1,
+                ..Default::default()
+            },
+            AdaptiveGeneticAlgorithmParameters {
+                parameter_adjustment_interval: 0,
+                ..Default::default()
+            },
+        ];
+
+        for parameters in invalid {
+            assert!(matches!(
+                AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, parameters),
+                Err(EvolutionError::InvalidParameter { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn evolution_fails_without_valid_initial_individual() {
+        let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
+            .unwrap()
+            .into_evolution();
+
+        let result = evolution.evolve_population(vec![OneMax::from(vec![])], |_| true);
+
+        assert_eq!(result.err(), Some(EvolutionError::EmptyPopulation));
     }
 }

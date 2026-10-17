@@ -1,6 +1,4 @@
 use super::*;
-use rand::distributions::Uniform;
-use rayon::prelude::*;
 
 /// Represents various selection strategies for selecting an individual from the population in
 /// an evolutionary algorithm.
@@ -13,80 +11,106 @@ use rayon::prelude::*;
 /// Each selection strategy has its own strengths and weaknesses, and the choice of strategy can
 /// significantly impact the performance of the evolutionary algorithm.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum SelectionStrategy {
-    /// The tournament selection strategy involves running a "tournament" among a few individuals
-    /// chosen at random from the population and selecting the winner (the one with the best fitness).
-    /// The size parameter represents the number of individuals to be selected for the tournament.
+    /// The tournament selection strategy runs a "tournament" among a few individuals chosen at
+    /// random from the population and selects the winner (the one with the best fitness). The
+    /// parameter is the number of individuals in a tournament. See [`TournamentSelection`].
     Tournament(usize /* size */),
 
-    /// The roulette wheel selection strategy involves choosing individuals based on their fitness
-    /// proportionate to the total fitness of the population, like spinning a roulette wheel.
+    /// The roulette wheel selection strategy selects individuals with a probability proportional
+    /// to their fitness, like spinning a roulette wheel. See [`RouletteWheelSelection`].
     RouletteWheel,
 
-    /// The Boltzmann selection strategy involves selecting individuals with a probability that is
-    /// a function of their fitness and a decreasing "temperature" parameter. The first parameter
-    /// represents the initial temperature, and the second one represents the cooling rate.
+    /// The Boltzmann selection strategy selects individuals with a probability that is a function
+    /// of their fitness and a decreasing "temperature". The first parameter is the initial
+    /// temperature, and the second one is the cooling rate. See [`BoltzmannSelection`].
     Boltzmann(f64 /* temperature */, f64 /* cooling rate */),
 
-    /// The rank selection strategy involves selecting individuals based on their rank in the population
-    /// when sorted by fitness, rather than their actual fitness values.
+    /// The rank selection strategy selects individuals with a probability proportional to their
+    /// rank in the population when sorted by fitness. See [`RankSelection`].
     Rank,
 
-    /// The linear selection strategy involves selecting individuals with a probability that is a
-    /// linear function of their rank. The bias parameter determines the slope of the function.
-    Linear(f64 /* bias */),
+    /// The linear selection strategy selects individuals with a probability that is a linear
+    /// function of their rank. The parameter is the selective pressure. See [`LinearSelection`].
+    Linear(f64 /* selective pressure */),
 
-    /// The elitist selection strategy involves always selecting a certain ratio of the best individuals
-    /// in the population. The ratio parameter determines the proportion of individuals to be selected.
+    /// The elitist selection strategy selects uniformly among a top portion of the population.
+    /// The parameter is the ratio of the population that is excluded from the selection. See
+    /// [`ElitistSelection`].
     Elitist(f64 /* ratio */),
 }
 
 impl SelectionStrategy {
-    /// Creates the selector for the the selected selection strategy.
-    pub fn create_selector<I: Individual, R: Rng>(&self) -> Box<dyn SelectionMechanism<I, R>> {
-        match self {
-            SelectionStrategy::Tournament(size) => Box::new(TournamentSelection::new(*size)),
-            SelectionStrategy::RouletteWheel => Box::new(RouletteWheelSelection::new()),
-            SelectionStrategy::Rank => Box::new(RankSelection::new()),
-            SelectionStrategy::Linear(bias) => Box::new(LinearSelection::new(*bias)),
-            SelectionStrategy::Elitist(ratio) => Box::new(ElitistSelection::new(*ratio)),
-            SelectionStrategy::Boltzmann(temperature, cooling_rate) => {
-                Box::new(BoltzmannSelection::new(*temperature, *cooling_rate))
+    /// Validates the parameters of the strategy.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if a parameter of the strategy is invalid.
+    pub fn validate(&self) -> Result<(), EvolutionError> {
+        match *self {
+            Self::Tournament(size) => TournamentSelection::new(size).map(drop),
+            Self::RouletteWheel | Self::Rank => Ok(()),
+            Self::Boltzmann(temperature, cooling_rate) => {
+                BoltzmannSelection::new(temperature, cooling_rate).map(drop)
             }
+            Self::Linear(pressure) => LinearSelection::new(pressure).map(drop),
+            Self::Elitist(ratio) => ElitistSelection::new(ratio).map(drop),
         }
+    }
+
+    /// Creates the selection mechanism of the strategy.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if a parameter of the strategy is invalid.
+    pub fn create_selector<I: Individual>(
+        &self,
+    ) -> Result<Box<dyn SelectionMechanism<I>>, EvolutionError> {
+        Ok(match *self {
+            Self::Tournament(size) => Box::new(TournamentSelection::new(size)?),
+            Self::RouletteWheel => Box::new(RouletteWheelSelection::new()),
+            Self::Rank => Box::new(RankSelection::new()),
+            Self::Linear(pressure) => Box::new(LinearSelection::new(pressure)?),
+            Self::Elitist(ratio) => Box::new(ElitistSelection::new(ratio)?),
+            Self::Boltzmann(temperature, cooling_rate) => {
+                Box::new(BoltzmannSelection::new(temperature, cooling_rate)?)
+            }
+        })
     }
 }
 
 /// Defines the mechanism for selecting an individual from the population in an evolutionary
 /// algorithm.
-pub trait SelectionMechanism<I, R>: Sync
-where
-    I: Individual,
-    R: Rng,
-{
-    /// Prepares the mechanism for a new population.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the population from which an individual will be selected.
+///
+/// The mechanism is shared by the threads that breed offspring in parallel, and it is part of
+/// algorithms that may be moved to other threads, so it must be [`Send`] and [`Sync`].
+pub trait SelectionMechanism<I: Individual>: Send + Sync {
+    /// Restores the state the mechanism adapts during a run, for a new run.
     ///
     /// # Note
-    /// This method is called once before selecting individuals from a new population. It
-    /// can be used to perform any necessary setup or pre-processing steps before selecting
-    /// individuals.
+    /// The algorithms of this library call this method when a run starts. The default
+    /// implementation performs no operation.
+    fn reset(&mut self) {}
+
+    /// Prepares the mechanism for selecting individuals from a population.
+    ///
+    /// # Arguments
+    /// * `population` - A reference to the population from which individuals will be selected.
+    ///
+    /// # Note
+    /// This method must be called once for each new population before selecting individuals
+    /// from it. It can be used to perform any necessary pre-processing.
     fn prepare(&mut self, population: &Population<I>);
 
     /// Selects an individual from the population.
     ///
     /// # Arguments
     /// * `population` - A reference to the population from which an individual will be
-    ///   selected.
+    ///   selected. It must be the population the mechanism was last prepared for.
     /// * `rng` - A random number generator for stochastic selection strategies.
     ///
-    /// # Note
-    /// The method should return a reference to the selected individual. The implementation
-    /// should take into account the fitness of the individuals in the population, as well as
-    /// any other selection criteria that are part of the selection strategy.
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I);
+    /// # Returns
+    /// The index and a reference of the selected individual.
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I);
 
     /// Selects an individual from the population, excluding a specific individual.
     /// The selection attempt will be repeated for a specified number of tries (`max_tries`),
@@ -96,30 +120,20 @@ where
     /// * `population` - A reference to the population from which an individual will be selected.
     /// * `rng` - A random number generator for stochastic selection strategies.
     /// * `max_tries` - The maximum number of selection attempts before giving up.
-    ///   This parameter prevents potential infinite loops in cases where all individuals
-    ///   are the same.
     /// * `excluded` - The individual to be excluded from selection.
     ///
     /// # Returns
     /// Returns a tuple containing the index and a reference to the selected individual distinct
     /// from the `excluded` one. If no different individual is found after `max_tries` attempts,
     /// the method returns [`None`].
-    ///
-    /// # Note
-    /// This method is especially useful in genetic operations like crossover, where typically
-    /// two distinct individuals need to be selected from the population.
     #[inline]
     fn select_distinct<'a>(
         &self,
         population: &'a Population<I>,
-        rng: &mut R,
+        rng: &mut Rng,
         max_tries: usize,
         excluded: &I,
-    ) -> Option<(usize, &'a I)>
-    where
-        I: Individual,
-        R: Rng,
-    {
+    ) -> Option<(usize, &'a I)> {
         for _ in 0..max_tries {
             let (index, candidate) = self.select(population, rng);
             if candidate != excluded {
@@ -130,25 +144,89 @@ where
     }
 }
 
+/// Samples indices of a population uniformly from a range of indices.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct UniformIndex {
+    population_len: usize,
+    indices: Option<UniformIndices>,
+}
+
+impl UniformIndex {
+    /// Prepares for sampling indices from `start..population_len`.
+    fn prepare(&mut self, start: usize, population_len: usize) {
+        self.population_len = population_len;
+        self.indices = UniformIndices::new(start..population_len);
+    }
+
+    #[inline]
+    fn sample(&self, population_len: usize, rng: &mut Rng) -> usize {
+        match self.indices {
+            Some(indices) if population_len == self.population_len => indices.sample(rng),
+            _ => panic!("the selection mechanism is not prepared for the population"),
+        }
+    }
+}
+
+/// Samples indices with probabilities proportional to non-negative weights.
+///
+/// Weights that are negative or not finite count as zero. If no weight is positive, every index
+/// is equally likely.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct WeightedIndex {
+    cumulative_weights: Vec<f64>,
+}
+
+impl WeightedIndex {
+    fn rebuild(&mut self, weights: impl Iterator<Item = f64>) {
+        let mut total = 0.0;
+        self.cumulative_weights.clear();
+        self.cumulative_weights.extend(weights.map(|weight| {
+            if weight > 0.0 && weight.is_finite() {
+                total += weight;
+            }
+            total
+        }));
+    }
+
+    fn sample(&self, len: usize, rng: &mut Rng) -> usize {
+        assert!(
+            self.cumulative_weights.len() == len,
+            "the selection mechanism is not prepared for the population"
+        );
+
+        let total = self.cumulative_weights.last().copied().unwrap_or(0.0);
+        if total > 0.0 && total.is_finite() {
+            let target = rng.random_f64() * total;
+            let index = self.cumulative_weights.partition_point(|&c| c <= target);
+            index.min(len - 1)
+        } else {
+            rng.random_range(0..len)
+        }
+    }
+}
+
 /// Represents the tournament selection algorithm.
 ///
 /// # Note
-/// The tournament selection method involves selecting a fixed number of random
-/// candidates from the population (determined by tournament's size) and choosing
-/// the candidate with the highest fitness.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// The tournament selection method draws a fixed number of random candidates from the
+/// population, with replacement, and selects the candidate with the highest fitness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TournamentSelection {
     size: usize,
+    indices: UniformIndex,
 }
 
 impl TournamentSelection {
-    /// Creates a new instance.
+    /// Creates a new instance with the given tournament size.
     ///
-    /// # Panics
-    /// The method will panic if `size` is zero.
-    pub fn new(size: usize) -> Self {
-        assert!(size != 0);
-        Self { size }
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `size` is zero.
+    pub fn new(size: usize) -> Result<Self, EvolutionError> {
+        Self::check_size(size)?;
+        Ok(Self {
+            size,
+            indices: UniformIndex::default(),
+        })
     }
 
     /// Gets the tournament size.
@@ -158,114 +236,139 @@ impl TournamentSelection {
 
     /// Sets the tournament size.
     ///
-    /// # Panics
-    /// The method will panic if `size` is zero.
-    pub fn set_size(&mut self, size: usize) {
-        assert!(size != 0);
-        self.size = size
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `size` is zero.
+    pub fn set_size(&mut self, size: usize) -> Result<(), EvolutionError> {
+        Self::check_size(size)?;
+        self.size = size;
+        Ok(())
+    }
+
+    fn check_size(size: usize) -> Result<(), EvolutionError> {
+        if size == 0 {
+            return Err(EvolutionError::invalid_parameter(
+                "tournament size",
+                "must be positive",
+            ));
+        }
+        Ok(())
     }
 }
 
-impl<I, R> SelectionMechanism<I, R> for TournamentSelection
-where
-    I: Individual,
-    R: Rng,
-{
+impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
     #[inline]
-    fn prepare(&mut self, _population: &Population<I>) {}
+    fn prepare(&mut self, population: &Population<I>) {
+        self.indices.prepare(0, population.len());
+    }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I) {
-        rng.sample_iter(Uniform::new(0, population.len()))
-            .take(self.size)
-            .max() // The population is already sorted by the fitness of individuals
-            .map(|i| (i, &population[i]))
-            .unwrap()
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+        // The population is sorted by fitness, so the highest index wins the tournament.
+        let index = (0..self.size)
+            .map(|_| self.indices.sample(population.len(), rng))
+            .max()
+            .unwrap();
+        (index, &population[index])
     }
 }
 
 /// Represents the roulette-wheel selection algorithm used in genetic algorithms.
 ///
 /// # Note
-/// The roulette wheel selection method calculates the total fitness of the
-/// population and chooses a random target value. It iterates over the population,
-/// summing up the fitness values, and selects the first individual whose cumulative
-/// fitness is greater than or equal to the target value.
-#[derive(Default, Clone, Copy, PartialEq)]
+/// The roulette wheel selection method selects an individual with a probability proportional to
+/// its fitness score.
+///
+/// Fitness-proportionate selection is defined for non-negative fitness scores only. If the
+/// population has a negative fitness score, the scores are shifted by the lowest one, so the
+/// probabilities become proportional to the distance from the least fit individual, which is
+/// never selected unless all individuals have the same fitness. If all weights are zero, every
+/// individual is equally likely to be selected.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RouletteWheelSelection {
-    total_fitness: f64,
+    weights: WeightedIndex,
 }
 
 impl RouletteWheelSelection {
     /// Creates a new instance.
     pub fn new() -> Self {
-        Self { total_fitness: 0.0 }
+        Self::default()
     }
 }
 
-impl<I, R> SelectionMechanism<I, R> for RouletteWheelSelection
-where
-    I: Individual,
-    R: Rng,
-{
+impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        self.total_fitness = population.par_iter().map(|i| i.fitness()).sum();
+        let offset = population.stats().min().min(0.0);
+        self.weights
+            .rebuild(population.iter().map(|i| i.fitness() - offset));
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I) {
-        let target_fitness = rng.gen::<f64>() * self.total_fitness;
-        let mut cumulative_fitness = 0.0;
-        for (index, individual) in population.iter().enumerate() {
-            cumulative_fitness += individual.fitness();
-            if cumulative_fitness >= target_fitness {
-                return (index, individual);
-            }
-        }
-        (population.len() - 1, population.last().unwrap())
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+        let index = self.weights.sample(population.len(), rng);
+        (index, &population[index])
     }
 }
 
 /// Represents the Boltzmann selection algorithm used in genetic algorithms.
 ///
 /// # Note
-/// In Boltzmann selection, the selection probability of an individual is determined by
-/// its fitness relative to other individuals in the population and the algorithm's
-/// temperature parameter. The Boltzmann distribution from statistical mechanics is used
-/// to create a probability distribution for selection.
+/// In Boltzmann selection, the probability of selecting an individual with fitness `f` is
+/// proportional to `exp(f / T)`, where `T` is the temperature. A high temperature makes the
+/// probabilities more uniform, which encourages exploration, while a low temperature favors the
+/// fittest individuals, which encourages exploitation.
 ///
-/// This strategy encourages exploration in the early stages and exploitation in the
-/// later stages of the algorithm by adjusting the temperature and cooling rate.
-#[derive(Clone, Copy, PartialEq)]
+/// The first population of a run is selected from at the initial temperature, and the
+/// temperature is multiplied by the cooling rate after each population. The weights are computed relative to
+/// the fittest individual, so they cannot overflow at any temperature.
+#[derive(Debug, Clone, PartialEq)]
 pub struct BoltzmannSelection {
+    initial_temperature: f64,
     temperature: f64,
     cooling_rate: f64,
-    total_scaled_fitness: f64,
+    weights: WeightedIndex,
 }
 
 impl BoltzmannSelection {
     /// Creates a new instance.
     ///
-    /// # Panic
-    /// The method will panic if `cooling_rate` is zero.
-    pub fn new(temperature: f64, cooling_rate: f64) -> Self {
-        assert!(cooling_rate != 0.0);
-        Self {
+    /// # Arguments
+    /// * `temperature` - The initial temperature, which must be positive and finite.
+    /// * `cooling_rate` - The factor the temperature is multiplied by after each population,
+    ///   which must be positive and finite. A value less than 1.0 cools the temperature down.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if a parameter is invalid.
+    pub fn new(temperature: f64, cooling_rate: f64) -> Result<Self, EvolutionError> {
+        Self::check_positive("temperature", temperature)?;
+        Self::check_positive("cooling rate", cooling_rate)?;
+        Ok(Self {
+            initial_temperature: temperature,
             temperature,
             cooling_rate,
-            total_scaled_fitness: 0.0,
-        }
+            weights: WeightedIndex::default(),
+        })
     }
 
-    /// Gets the current temperature.
+    /// Gets the initial temperature, which [`reset`](SelectionMechanism::reset) restores for a
+    /// new run.
+    pub fn initial_temperature(&self) -> f64 {
+        self.initial_temperature
+    }
+
+    /// Gets the temperature for the next population.
     pub fn temperature(&self) -> f64 {
         self.temperature
     }
 
-    /// Sets the current temperature.
-    pub fn set_temperature(&mut self, temperature: f64) {
-        self.temperature = temperature
+    /// Sets the temperature for the next population, without changing the initial temperature.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `temperature` is not positive and finite.
+    pub fn set_temperature(&mut self, temperature: f64) -> Result<(), EvolutionError> {
+        Self::check_positive("temperature", temperature)?;
+        self.temperature = temperature;
+        Ok(())
     }
 
     /// Gets the cooling rate.
@@ -275,203 +378,217 @@ impl BoltzmannSelection {
 
     /// Sets the cooling rate.
     ///
-    /// # Panic
-    /// The method will panic if `cooling_rate` is zero.
-    pub fn set_cooling_rate(&mut self, cooling_rate: f64) {
-        assert!(cooling_rate != 0.0);
-        self.cooling_rate = cooling_rate
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `cooling_rate` is not positive and finite.
+    pub fn set_cooling_rate(&mut self, cooling_rate: f64) -> Result<(), EvolutionError> {
+        Self::check_positive("cooling rate", cooling_rate)?;
+        self.cooling_rate = cooling_rate;
+        Ok(())
     }
 
-    /// Calculates the Boltzmann scaled fitness of an individual.
-    #[inline]
-    fn scaled_fitness<I: Individual>(&self, individual: &I) -> f64 {
-        (individual.fitness() / self.temperature).exp()
+    fn check_positive(name: &'static str, value: f64) -> Result<(), EvolutionError> {
+        if value > 0.0 && value.is_finite() {
+            Ok(())
+        } else {
+            Err(EvolutionError::invalid_parameter(
+                name,
+                "must be positive and finite",
+            ))
+        }
     }
 }
 
-impl<I, R> SelectionMechanism<I, R> for BoltzmannSelection
-where
-    I: Individual,
-    R: Rng,
-{
+impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
     #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
-        self.temperature *= self.cooling_rate;
-        self.total_scaled_fitness = population
-            .par_iter()
-            .map(|i| self.scaled_fitness(i))
-            .sum();
+    fn reset(&mut self) {
+        self.temperature = self.initial_temperature;
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I) {
-        let target_fitness = rng.gen::<f64>() * self.total_scaled_fitness;
-        let mut cumulative_fitness = 0.0;
-        for (index, individual) in population.iter().enumerate() {
-            cumulative_fitness += self.scaled_fitness(individual);
-            if cumulative_fitness >= target_fitness {
-                return (index, individual);
-            }
-        }
-        (population.len() - 1, population.last().unwrap())
+    fn prepare(&mut self, population: &Population<I>) {
+        // exp((f - f_max) / T) is proportional to exp(f / T) and lies in (0, 1].
+        let temperature = self.temperature.max(f64::MIN_POSITIVE);
+        let max_fitness = population.stats().max();
+        self.weights.rebuild(
+            population
+                .iter()
+                .map(|i| ((i.fitness() - max_fitness) / temperature).exp()),
+        );
+        self.temperature = (self.temperature * self.cooling_rate).max(f64::MIN_POSITIVE);
+    }
+
+    #[inline]
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+        let index = self.weights.sample(population.len(), rng);
+        (index, &population[index])
     }
 }
 
 /// Represents the rank selection algorithm used in genetic algorithms.
 ///
 /// # Note
-/// In rank selection, the population is first sorted by fitness. A random target rank is
-/// chosen, based on the total ranks of the population. The algorithm iterates over the
-/// sorted population, summing up the ranks, and returns the first individual whose
-/// cumulative rank is greater than or equal to the target rank.
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
-pub struct RankSelection {}
+/// In rank selection, the probability of selecting an individual is proportional to its rank
+/// in the population sorted by fitness, where the least fit individual has rank 1 and the
+/// fittest has rank `n`.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct RankSelection {
+    weights: WeightedIndex,
+}
 
 impl RankSelection {
     /// Creates a new instance.
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 }
 
-impl<I, R> SelectionMechanism<I, R> for RankSelection
-where
-    I: Individual,
-    R: Rng,
-{
+impl<I: Individual> SelectionMechanism<I> for RankSelection {
     #[inline]
-    fn prepare(&mut self, _population: &Population<I>) {
-        // The population is already sorted by the fitness of individuals
+    fn prepare(&mut self, population: &Population<I>) {
+        // The population is sorted by the fitness of individuals.
+        self.weights
+            .rebuild((1..=population.len()).map(|rank| rank as f64));
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I) {
-        let n = population.len();
-        let total_ranks = n * (n + 1) / 2;
-        let target_rank = rng.gen_range(1..=total_ranks);
-
-        let mut cumulative_rank = 0;
-        for (index, individual) in population.iter().enumerate() {
-            cumulative_rank += index + 1;
-            if cumulative_rank >= target_rank {
-                return (index, individual);
-            }
-        }
-        (0, population.first().unwrap())
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+        let index = self.weights.sample(population.len(), rng);
+        (index, &population[index])
     }
 }
 
 /// Represents the elitist selection algorithm used in genetic algorithms.
 ///
 /// # Note
-/// Elitist selection directly favors the best-performing individuals in a population,
-/// ensuring that top performers have a chance to pass their genetic information to the
-/// next generation. This promotes convergence to an optimal solution.
+/// Elitist selection excludes the least fit portion of the population, given by the ratio, and
+/// selects uniformly among the remaining, fittest individuals. At least the fittest individual
+/// always remains selectable.
 ///
-/// The algorithm works by selecting a fixed percentage of the best individuals based
-/// on their fitness values. This typically involves sorting the population by fitness
-/// and selecting the top-ranked individuals.
-///
-/// Note that using a high selection ratio in elitist selection may lead to premature
-/// convergence and a loss of population diversity.
+/// Note that using a high ratio in elitist selection may lead to premature convergence and a
+/// loss of population diversity.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ElitistSelection {
     ratio: f64,
+    indices: UniformIndex,
 }
 
 impl ElitistSelection {
     /// Creates a new instance.
     ///
-    /// # Panics
-    /// The method will panic if `ratio` is not between 0.0 (inclusive)
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `ratio` is not between 0.0 (inclusive)
     /// and 1.0 (exclusive).
-    pub fn new(ratio: f64) -> Self {
-        assert!((0.0..1.0).contains(&ratio));
-        Self { ratio }
+    pub fn new(ratio: f64) -> Result<Self, EvolutionError> {
+        check_ratio("elitist selection ratio", ratio)?;
+        Ok(Self {
+            ratio,
+            indices: UniformIndex::default(),
+        })
     }
 
-    /// Gets the selection ratio.
+    /// Gets the ratio of the population that is excluded from the selection.
     pub fn ratio(&self) -> f64 {
         self.ratio
     }
 
-    /// Sets the selection ratio.
+    /// Sets the ratio of the population that is excluded from the selection, which takes
+    /// effect from the next population.
     ///
-    /// # Panics
-    /// The method will panic if `ratio` is not between 0.0 (inclusive)
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `ratio` is not between 0.0 (inclusive)
     /// and 1.0 (exclusive).
-    pub fn set_ratio(&mut self, ratio: f64) {
-        assert!((0.0..1.0).contains(&ratio));
-        self.ratio = ratio
+    pub fn set_ratio(&mut self, ratio: f64) -> Result<(), EvolutionError> {
+        check_ratio("elitist selection ratio", ratio)?;
+        self.ratio = ratio;
+        Ok(())
     }
 }
 
-impl<I, R> SelectionMechanism<I, R> for ElitistSelection
-where
-    I: Individual,
-    R: Rng,
-{
+impl<I: Individual> SelectionMechanism<I> for ElitistSelection {
     #[inline]
-    fn prepare(&mut self, _population: &Population<I>) {
-        // The population is already sorted by the fitness of individuals
+    fn prepare(&mut self, population: &Population<I>) {
+        // The population is sorted by the fitness of individuals.
+        let selection_bound = interpolate_usize(0, population.len(), self.ratio);
+        self.indices.prepare(selection_bound, population.len());
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I) {
-        let selection_bound = (population.len() as f64 * self.ratio).floor() as usize;
-        let index = rng.gen_range(selection_bound..population.len());
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+        let index = self.indices.sample(population.len(), rng);
         (index, &population[index])
     }
 }
 
-/// Represents the linear selection algorithm used in genetic algorithms.
+/// Represents the linear ranking selection algorithm used in genetic algorithms.
 ///
 /// # Note
-/// Linear selection is a variant of rank-based selection that introduces a bias factor
-/// to adjust the selection pressure. Higher bias values result in stronger selection
-/// pressure, which means individuals with higher fitness values have a higher chance
-/// of being selected.
-#[derive(Clone, Copy, PartialEq)]
+/// Linear selection is a variant of rank selection in which the selection probability is a
+/// linear function of the rank, controlled by the selective pressure `s` between 1.0 and 2.0,
+/// inclusive. The fittest individual is `s` times as likely to be selected as an average
+/// individual, and the least fit one is `2 - s` times as likely. A pressure of 1.0 selects
+/// uniformly, and higher values result in stronger selection pressure.
+#[derive(Debug, Clone, PartialEq)]
 pub struct LinearSelection {
-    bias: f64,
+    pressure: f64,
+    weights: WeightedIndex,
 }
 
 impl LinearSelection {
-    /// Creates a new instance.
-    pub fn new(bias: f64) -> Self {
-        Self { bias }
+    /// Creates a new instance with the given selective pressure.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `pressure` is not between 1.0 and 2.0,
+    /// inclusive.
+    pub fn new(pressure: f64) -> Result<Self, EvolutionError> {
+        Self::check_pressure(pressure)?;
+        Ok(Self {
+            pressure,
+            weights: WeightedIndex::default(),
+        })
     }
 
-    /// Gets the bias factor.
-    pub fn bias(&self) -> f64 {
-        self.bias
+    /// Gets the selective pressure.
+    pub fn pressure(&self) -> f64 {
+        self.pressure
     }
 
-    /// Sets the bias factor.
-    pub fn set_bias(&mut self, bias: f64) {
-        self.bias = bias
+    /// Sets the selective pressure, which takes effect from the next population.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if `pressure` is not between 1.0 and 2.0,
+    /// inclusive.
+    pub fn set_pressure(&mut self, pressure: f64) -> Result<(), EvolutionError> {
+        Self::check_pressure(pressure)?;
+        self.pressure = pressure;
+        Ok(())
+    }
+
+    fn check_pressure(pressure: f64) -> Result<(), EvolutionError> {
+        if (1.0..=2.0).contains(&pressure) {
+            Ok(())
+        } else {
+            Err(EvolutionError::invalid_parameter(
+                "selective pressure",
+                "must be between 1.0 and 2.0, inclusive",
+            ))
+        }
     }
 }
 
-impl<I, R> SelectionMechanism<I, R> for LinearSelection
-where
-    I: Individual,
-    R: Rng,
-{
+impl<I: Individual> SelectionMechanism<I> for LinearSelection {
     #[inline]
-    fn prepare(&mut self, _population: &Population<I>) {
-        // The population is already sorted by the fitness of individuals
+    fn prepare(&mut self, population: &Population<I>) {
+        // The population is sorted by the fitness of individuals.
+        let n = population.len();
+        let last = n.saturating_sub(1).max(1) as f64;
+        let s = self.pressure;
+        self.weights
+            .rebuild((0..n).map(|i| (2.0 - s) + 2.0 * (s - 1.0) * i as f64 / last));
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut R) -> (usize, &'a I) {
-        let index = population.len()
-            - ((population.len() as f64)
-                * (self.bias
-                    - ((self.bias * self.bias - 4.0 * (self.bias - 1.0) * rng.gen::<f64>())
-                        .sqrt()))
-                / 2.0
-                / (self.bias - 1.0)) as usize
-            - 1;
+    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+        let index = self.weights.sample(population.len(), rng);
         (index, &population[index])
     }
 }
@@ -495,126 +612,187 @@ mod tests {
     const ITERATIONS: usize = 100000;
     const CONFIDENCE: f64 = 0.01;
 
-    fn create_test_population() -> Population<MockIndividual> {
+    fn create_population(fitness: impl Fn(usize) -> f64) -> Population<MockIndividual> {
         (0..POPULATION_SIZE)
             .map(|i| MockIndividual {
-                fitness: i as f64 / POPULATION_SIZE as f64,
+                fitness: fitness(i),
             })
             .collect::<Vec<_>>()
             .try_into()
             .unwrap()
     }
 
-    fn collect_samples<S>(strategy: &mut S) -> (Vec<MockIndividual>, Vec<u32>)
-    where
-        S: SelectionMechanism<MockIndividual, SmallRng>,
-    {
-        let mut rng = SmallRng::seed_from_u64(0);
-        let population = create_test_population();
-        let mut counts = vec![0; POPULATION_SIZE];
+    fn create_test_population() -> Population<MockIndividual> {
+        create_population(|i| i as f64 / POPULATION_SIZE as f64)
+    }
 
-        strategy.prepare(&population);
+    fn observed_probabilities<S>(
+        strategy: &mut S,
+        population: &Population<MockIndividual>,
+    ) -> Vec<f64>
+    where
+        S: SelectionMechanism<MockIndividual>,
+    {
+        let mut rng = Rng::from_seed(0);
+        let mut counts = vec![0; population.len()];
+
+        strategy.prepare(population);
         for _ in 0..ITERATIONS {
-            let (index, _) = strategy.select(&population, &mut rng);
+            let (index, _) = strategy.select(population, &mut rng);
             counts[index] += 1;
         }
-        (population.into(), counts)
+        counts
+            .into_iter()
+            .map(|count| count as f64 / ITERATIONS as f64)
+            .collect()
+    }
+
+    fn assert_probabilities(observed: &[f64], expected: impl Fn(usize) -> f64) {
+        for (index, &observed) in observed.iter().enumerate() {
+            let expected = expected(index);
+            assert!(
+                (observed - expected).abs() < CONFIDENCE,
+                "index {index}: observed {observed}, expected {expected}"
+            );
+        }
     }
 
     #[test]
     fn test_tournament_selection_probabilities() {
-        let mut tournament = TournamentSelection::new(2);
-        let (population, observed_counts) = collect_samples(&mut tournament);
+        let mut tournament = TournamentSelection::new(2).unwrap();
+        let population = create_test_population();
+        let observed = observed_probabilities(&mut tournament, &population);
 
-        for (index, count) in observed_counts.into_iter().enumerate() {
-            let observed_probability = count as f64 / ITERATIONS as f64;
-            let expected_probability = (1.0
-                - (index as f64 / population.len() as f64).powi(tournament.size as i32))
-                - (1.0
-                    - ((index as f64 + 1.0) / population.len() as f64)
-                        .powi(tournament.size as i32));
-
-            assert!((observed_probability - expected_probability).abs() < CONFIDENCE);
-        }
+        let n = population.len() as f64;
+        let size = tournament.size() as i32;
+        assert_probabilities(&observed, |index| {
+            (1.0 - (index as f64 / n).powi(size)) - (1.0 - ((index as f64 + 1.0) / n).powi(size))
+        });
     }
 
     #[test]
     fn test_roulette_wheel_selection_probabilities() {
         let mut roulette_wheel = RouletteWheelSelection::new();
-        let (population, observed_counts) = collect_samples(&mut roulette_wheel);
+        let population = create_test_population();
+        let observed = observed_probabilities(&mut roulette_wheel, &population);
 
         let total_fitness = population.iter().map(|i| i.fitness).sum::<f64>();
-        for (index, count) in observed_counts.into_iter().enumerate() {
-            let observed_probability = count as f64 / ITERATIONS as f64;
-            let expected_probability = population[index].fitness / total_fitness;
+        assert_probabilities(&observed, |index| population[index].fitness / total_fitness);
+    }
 
-            assert!((observed_probability - expected_probability).abs() < CONFIDENCE);
-        }
+    #[test]
+    fn test_roulette_wheel_selection_with_negative_fitness() {
+        let mut roulette_wheel = RouletteWheelSelection::new();
+        let population = create_population(|i| i as f64 - 20.0);
+        let observed = observed_probabilities(&mut roulette_wheel, &population);
+
+        // The fitness scores are shifted by the lowest one, -20.
+        let total_shifted = (0..POPULATION_SIZE).sum::<usize>() as f64;
+        assert_probabilities(&observed, |index| index as f64 / total_shifted);
+    }
+
+    #[test]
+    fn test_roulette_wheel_selection_with_zero_fitness() {
+        let mut roulette_wheel = RouletteWheelSelection::new();
+        let population: Population<MockIndividual> =
+            vec![MockIndividual { fitness: 0.0 }].try_into().unwrap();
+        let observed = observed_probabilities(&mut roulette_wheel, &population);
+
+        assert_probabilities(&observed, |_| 1.0);
     }
 
     #[test]
     fn test_rank_selection_probabilities() {
         let mut rank = RankSelection::new();
-        let (population, observed_counts) = collect_samples(&mut rank);
+        let population = create_test_population();
+        let observed = observed_probabilities(&mut rank, &population);
 
-        let total_ranks = population.len() * (population.len() + 1) / 2;
-        for (index, count) in observed_counts.into_iter().enumerate() {
-            let observed_probability = count as f64 / ITERATIONS as f64;
-            let expected_probability = (index + 1) as f64 / total_ranks as f64;
-
-            assert!((observed_probability - expected_probability).abs() < CONFIDENCE);
-        }
+        let total_ranks = (population.len() * (population.len() + 1) / 2) as f64;
+        assert_probabilities(&observed, |index| (index + 1) as f64 / total_ranks);
     }
 
     #[test]
     fn test_elitist_selection_probabilities() {
-        let mut elitist = ElitistSelection::new(0.7);
-        let (population, observed_counts) = collect_samples(&mut elitist);
+        let mut elitist = ElitistSelection::new(0.7).unwrap();
+        let population = create_test_population();
+        let observed = observed_probabilities(&mut elitist, &population);
 
-        let selection_bound = (population.len() as f64 * elitist.ratio).floor() as usize;
-        for (index, count) in observed_counts.into_iter().enumerate() {
-            let observed_probability = count as f64 / ITERATIONS as f64;
-            let expected_probability = if index >= selection_bound {
+        let selection_bound = (population.len() as f64 * elitist.ratio()).floor() as usize;
+        assert_probabilities(&observed, |index| {
+            if index >= selection_bound {
                 1.0 / (population.len() - selection_bound) as f64
             } else {
                 0.0
-            };
-
-            assert!((observed_probability - expected_probability).abs() < CONFIDENCE);
-        }
+            }
+        });
     }
 
     #[test]
     fn test_boltzmann_selection_probabilities() {
         // We keep the temperature constant for this test (cooling_rate = 1.0)
-        let mut boltzmann = BoltzmannSelection::new(5.0, 1.0);
-        let (population, observed_counts) = collect_samples(&mut boltzmann);
+        let mut boltzmann = BoltzmannSelection::new(5.0, 1.0).unwrap();
+        let population = create_test_population();
+        let observed = observed_probabilities(&mut boltzmann, &population);
 
-        let total_scaled_fitness = population
-            .iter()
-            .map(|i| (i.fitness / boltzmann.temperature).exp())
-            .sum::<f64>();
-        for (index, count) in observed_counts.into_iter().enumerate() {
-            let observed_probability = count as f64 / ITERATIONS as f64;
-            let expected_probability =
-                (population[index].fitness / boltzmann.temperature).exp() / total_scaled_fitness;
+        let scaled = |index: usize| (population[index].fitness / 5.0).exp();
+        let total_scaled = (0..population.len()).map(scaled).sum::<f64>();
+        assert_probabilities(&observed, |index| scaled(index) / total_scaled);
+    }
 
-            assert!((observed_probability - expected_probability).abs() < CONFIDENCE);
+    #[test]
+    fn test_boltzmann_selection_favors_fittest_after_cooling() {
+        let mut boltzmann = BoltzmannSelection::new(5.0, 0.9).unwrap();
+        let population = create_test_population();
+        for _ in 0..100 {
+            SelectionMechanism::<MockIndividual>::prepare(&mut boltzmann, &population);
         }
+        let observed = observed_probabilities(&mut boltzmann, &population);
+
+        // After 100 coolings, the temperature is about 1.3e-4, and the fittest individual is
+        // the only one with a non-negligible weight.
+        assert_probabilities(&observed, |index| {
+            if index == population.len() - 1 {
+                1.0
+            } else {
+                0.0
+            }
+        });
+    }
+
+    #[test]
+    fn test_boltzmann_selection_reset_restores_the_initial_temperature() {
+        let mut boltzmann = BoltzmannSelection::new(5.0, 0.5).unwrap();
+        let population = create_test_population();
+        SelectionMechanism::<MockIndividual>::prepare(&mut boltzmann, &population);
+        assert_eq!(boltzmann.temperature(), 2.5);
+
+        SelectionMechanism::<MockIndividual>::reset(&mut boltzmann);
+        assert_eq!(boltzmann.temperature(), 5.0);
     }
 
     #[test]
     fn test_linear_selection_probabilities() {
-        let mut linear = LinearSelection::new(1.25);
-        let (_, observed_counts) = collect_samples(&mut linear);
+        let n = POPULATION_SIZE as f64;
+        for pressure in [1.0, 1.25, 1.5, 2.0] {
+            let mut linear = LinearSelection::new(pressure).unwrap();
+            let population = create_test_population();
+            let observed = observed_probabilities(&mut linear, &population);
 
-        let mut last_observed_probability: Option<f64> = None;
-        for count in observed_counts {
-            let observed_probability = count as f64 / ITERATIONS as f64;
-            if let Some(previous_observed_probability) = last_observed_probability {
-                assert!(observed_probability + CONFIDENCE > previous_observed_probability);
-            }
-            last_observed_probability = Some(observed_probability);
+            assert_probabilities(&observed, |index| {
+                ((2.0 - pressure) + 2.0 * (pressure - 1.0) * index as f64 / (n - 1.0)) / n
+            });
         }
+    }
+
+    #[test]
+    fn test_selection_parameters_are_validated() {
+        assert!(TournamentSelection::new(0).is_err());
+        assert!(BoltzmannSelection::new(0.0, 0.9).is_err());
+        assert!(BoltzmannSelection::new(1.0, f64::INFINITY).is_err());
+        assert!(LinearSelection::new(0.9).is_err());
+        assert!(LinearSelection::new(2.1).is_err());
+        assert!(ElitistSelection::new(1.0).is_err());
+        assert!(SelectionStrategy::Linear(f64::NAN).validate().is_err());
+        assert!(SelectionStrategy::Rank.validate().is_ok());
     }
 }

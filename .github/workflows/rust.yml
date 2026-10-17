@@ -10,13 +10,42 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-
+  test:
+    name: Test on stable
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: Build
-      run: cargo build --verbose
+    - uses: actions/checkout@v4
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --locked --verbose
+    - name: Run tests with all features
+      run: cargo test --locked --all-features --verbose
+    - name: Build benchmarks
+      run: cargo bench --locked --no-run
+
+  msrv:
+    name: Test on the minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust 1.85
+      run: rustup toolchain install 1.85 --profile minimal
+    - name: Run tests
+      run: cargo +1.85 test --locked --all-features
+    - name: Build benchmarks
+      run: cargo +1.85 bench --locked --no-run
+
+  lint:
+    name: Check formatting, lints, and documentation
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install components
+      run: rustup component add rustfmt clippy
+    - name: Check formatting
+      run: cargo fmt --check
+    - name: Run clippy
+      run: cargo clippy --locked --all-targets --all-features -- -D warnings
+    - name: Build documentation
+      run: cargo doc --locked --no-deps --all-features
+      env:
+        RUSTDOCFLAGS: -D warnings

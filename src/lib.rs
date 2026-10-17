@@ -1,66 +1,83 @@
+//! RustyGenes is a library for building and running evolutionary algorithms, with a focus on
+//! permutation-based problems.
+//!
+//! # Overview
+//!
+//! A problem is described by an [`Individual`], which holds a candidate solution and its fitness,
+//! and an [`EvolutionModel`], which combines, varies, and evaluates individuals. The library
+//! maximizes fitness.
+//!
+//! An algorithm, such as [`GeneticAlgorithm`] or [`AdaptiveGeneticAlgorithm`], evolves a
+//! [`Population`] of individuals generation by generation, and an [`Evolution`] runs it. The
+//! algorithms breed offspring through a [`Reproduction`], which selects parents by a
+//! [`SelectionMechanism`] and keeps an offspring only if its [`SurvivalPolicy`] accepts it. Each
+//! of these can be replaced by an implementation of its trait, and [`EvolutionAlgorithm`] defines
+//! the steps of a custom algorithm.
+//!
+//! The crossover, mutation, and selection strategies are available as building blocks for models
+//! and algorithms: see [`CrossoverStrategy`], [`MutationStrategy`], and [`SelectionStrategy`].
+//!
+//! Randomness comes from the library's own [`Rng`]. A run seeded by [`Evolution::with_seed`]
+//! gives the same result on any number of threads.
+//!
+//! # Example
+//!
+//! ```
+//! use rusty_genes::one_max::*;
+//! use rusty_genes::*;
+//!
+//! let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())?
+//!     .into_evolution()
+//!     .with_seed(42);
+//!
+//! // Evolve 64-bit strings towards all '1' bits for at most 100 generations.
+//! let solution = evolution.run(&64, |population| {
+//!     population.fittest().fitness() < 1.0 && population.generation() < 100
+//! })?;
+//! assert_eq!(solution.genome().len(), 64);
+//! # Ok::<(), EvolutionError>(())
+//! ```
+//!
+//! # Features
+//!
+//! * `rand-0_10` - Implements the random number generator traits of `rand` 0.10 for [`Rng`], so
+//!   it can be used with the distributions and other functions of that crate.
+
 #![deny(unsafe_code)]
 
 mod algorithms;
+mod error;
 mod evolution;
 mod individual;
 mod model;
 mod operators;
 mod population;
+mod reproduction;
+mod rng;
 mod stats;
 
 pub use algorithms::*;
+pub use error::*;
 pub use evolution::*;
 pub use individual::*;
 pub use model::*;
 pub use operators::*;
 pub use population::*;
+pub use reproduction::*;
+pub use rng::*;
 pub use stats::*;
 
-/// Calculates the linear interpolation value between two `f64` values based on a given ratio.
-///
-/// # Arguments
-/// * `min` - The minimum value to be interpolated.
-/// * `max` - The maximum value to be interpolated.
-/// * `ratio` - An `f64` value representing the interpolation ratio. The ratio should be between
-///   0.0 and 1.0, where 0.0 corresponds to the minimum value and 1.0 corresponds to the maximum
-///   value.
-///
-/// # Returns
-/// Returns an `f64` value representing the interpolated value.
-///
-/// # Example
-/// ```
-/// use rusty_genes::*;
-///
-/// let interpolated_value = interpolate_f64(0.0, 10.0, 0.5);
-/// assert!((interpolated_value - 5.0).abs() < 1e-6);
-/// ```
+/// Returns the value at `ratio` of the way from `min` to `max`, where a ratio of 0.0 gives `min`
+/// and 1.0 gives `max`.
 #[inline]
-pub fn interpolate_f64(min: f64, max: f64, ratio: f64) -> f64 {
+pub(crate) fn interpolate_f64(min: f64, max: f64, ratio: f64) -> f64 {
     min + (max - min) * ratio
 }
 
-/// Calculates the linear interpolation value between two `usize` values based on a given ratio.
-///
-/// # Arguments
-/// * `min` - The minimum value to be interpolated.
-/// * `max` - The maximum value to be interpolated.
-/// * `ratio` - An `f64` value representing the interpolation ratio. The ratio should be between
-///   0.0 and 1.0, where 0.0 corresponds to the minimum value and 1.0 corresponds to the maximum
-///   value.
-///
-/// # Returns
-/// Returns a `usize` value representing the interpolated value.
-///
-/// # Example
-/// ```
-/// use rusty_genes::*;
-///
-/// let interpolated_value = interpolate_usize(0, 10, 0.5);
-/// assert_eq!(interpolated_value, 5);
-/// ```
+/// Returns the value at `ratio` of the way from `min` to `max`, rounded down. `max` must not be
+/// less than `min`.
 #[inline]
-pub fn interpolate_usize(min: usize, max: usize, ratio: f64) -> usize {
+pub(crate) fn interpolate_usize(min: usize, max: usize, ratio: f64) -> usize {
     (min as f64 + (max - min) as f64 * ratio) as usize
 }
 
@@ -70,7 +87,6 @@ pub fn interpolate_usize(min: usize, max: usize, ratio: f64) -> usize {
 /// of '1' bits in a binary string.
 pub mod one_max {
     use super::*;
-    use rand::{distributions::Standard, prelude::*};
 
     /// Represents an individual in the OneMax problem.
     ///
@@ -84,7 +100,7 @@ pub mod one_max {
     }
 
     impl OneMax {
-        // Returns the binary string of the individual.
+        /// Returns the binary string of the individual.
         pub fn genome(&self) -> &[bool] {
             &self.genome
         }
@@ -92,7 +108,8 @@ pub mod one_max {
 
     /// Conversion from a `Vec<bool>` to a `OneMax` individual.
     ///
-    /// This allows a binary string to be directly converted into an individual.
+    /// This allows a binary string to be directly converted into an individual. The individual
+    /// is not evaluated.
     impl From<Vec<bool>> for OneMax {
         fn from(genome: Vec<bool>) -> Self {
             Self {
@@ -116,9 +133,10 @@ pub mod one_max {
         ///
         /// The `length` parameter determines the length of the binary string (i.e., the genome),
         /// and the `rng` parameter is a random number generator used to generate the binary string.
-        fn new_random<R: Rng>(length: &usize, rng: &mut R) -> Self {
-            let bits = rng.sample_iter(Standard);
-            let genome = Vec::from_iter(bits.take(*length));
+        fn new_random(length: &usize, rng: &mut Rng) -> Self {
+            let genome = (0..*length)
+                .map(|_| rng.random_bool(0.5))
+                .collect::<Vec<_>>();
             Self::from(genome)
         }
     }
@@ -133,19 +151,13 @@ pub mod one_max {
     /// Implements the methods required by the [`EvolutionModel`] trait for the OneMax problem.
     impl EvolutionModel for OneMaxEvolutionModel {
         type Individual = OneMax;
-        type Rng = SmallRng;
-
-        /// Creates a new random number generator from entropy.
-        fn rng() -> Self::Rng {
-            SmallRng::from_entropy()
-        }
 
         /// Performs a single point crossover on the parents' genomes to create a new individual.
         fn crossover(
             &self,
             parent1: &Self::Individual,
             parent2: &Self::Individual,
-            rng: &mut Self::Rng,
+            rng: &mut Rng,
         ) -> Self::Individual {
             CrossoverStrategy::SinglePoint
                 .crossover(&parent1.genome, &parent2.genome, rng)
@@ -153,12 +165,12 @@ pub mod one_max {
         }
 
         /// Mutates the individual's genome by using the duplicate mutation strategy.
-        fn mutate(&self, individual: &mut Self::Individual, rng: &mut Self::Rng) {
+        fn mutate(&self, individual: &mut Self::Individual, rng: &mut Rng) {
             MutationStrategy::Duplicate.mutate(&mut individual.genome, rng);
         }
 
         /// Evaluates the individual's fitness by calculating the ratio of `true` bits to the total
-        /// number of bits in its genome.
+        /// number of bits in its genome. An empty genome is invalid, since its fitness is NaN.
         fn evaluate(&self, individual: &mut Self::Individual) {
             let one_bits = individual.genome.iter().filter(|&&one| one).count();
             let total_bits = individual.genome.len();
