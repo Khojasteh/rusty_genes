@@ -1,174 +1,176 @@
 # RustyGenes
 
-RustyGenes is a Rust library designed to facilitate the implementation and experimentation with evolutionary algorithms, especially those focused on permutation-based problems. This library is not intended for simple drop-in usage but rather provides a set of modular components that can be customized and assembled to match the requirements of your specific problem. It encourages the user to actively participate in the construction of their algorithm, promoting flexibility and extensibility.
+RustyGenes is a Rust library for building and running evolutionary algorithms, with a focus on
+permutation-based problems, where a solution is an ordering of items. You describe your problem
+as a model, and the library evolves a population of candidate solutions towards a higher
+fitness score, breeding each generation in parallel.
 
-One of the key features of RustyGenes is its support for creating custom algorithms by implementing a few core methods. This extensibility allows users to experiment with novel evolutionary strategies and techniques, pushing the boundaries of what's possible with genetic algorithms.
-
-RustyGenes provides the fundamental components of an evolutionary algorithm as separate modules, allowing for a high level of customization. These components include a variety of selection strategies, crossover strategies, and mutation strategies, as well as the structure for defining evolutionary models and individuals.
-
-The library supports only maximization problems. If your use case involves minimization, you would need to convert it into a maximization problem by adjusting the fitness function or the problem representation.
+The library provides building blocks rather than a ready-made solver: you choose the operators
+that suit your problem, and you can replace any step of an algorithm with your own.
 
 ## Features
 
-The library currently implements two evolutionary algorithms:
-- Standard Genetic Algorithm (GA)
-- Adaptive Genetic Algorithm: This algorithm dynamically adjusts the crossover and mutation rates based on the calculated diversity value. This promotes the exploitation of existing diversity through crossover operations when diversity is high, and encourages exploration by introducing and maintaining more diversity in the population when diversity is low.
+- **Algorithms:** a standard genetic algorithm, and an adaptive genetic algorithm that adjusts
+  its crossover and mutation rates to the diversity of the population.
+- **Selection:** tournament, roulette wheel, Boltzmann, rank, linear, and elitist.
+- **Crossover:** generalized partition (GPX2), sequential constructive (SCX), edge recombination
+  (ERX), partially mapped (PMX), order (OX), cycle (CX), and single-point (SPX).
+- **Mutation:** swap, scramble, inversion, insertion, and duplicate.
+- **Extensibility:** custom models, selection mechanisms, survival policies, and algorithms
+  through traits.
+- **Reproducibility:** a seeded run gives the same result on any number of threads.
 
-RustyGenes supports the following selection strategies:
-- Tournament Selection
-- Roulette Wheel Selection
-- Boltzmann Selection
-- Rank Selection
-- Linear Selection
-- Elitist Selection
+## Installation
 
-It also provides a variety of crossover strategies:
-- Generalized Partition Crossover 2 (GPX2)
-- Sequential Constructive Crossover (SCX)
-- Edge Recombination Crossover (ERX)
-- Partially Mapped Crossover (PMX)
-- Order Crossover (OX)
-- Cycle Crossover (CX)
-- Single-Point Crossover (SPX)
+```sh
+cargo add rusty_genes
+```
 
-The mutation strategies supported by RustyGenes include:
-- Swap Mutation
-- Scramble Mutation
-- Inversion Mutation
-- Insertion Mutation
-- Duplicate Mutation
+RustyGenes requires Rust 1.85 or later.
 
-## Usage
+Models use the library's own random number generator, `rusty_genes::Rng`, so they need no
+other dependency. To use the distributions of `rand` 0.10 with it, enable the `rand-0_10`
+feature.
 
-Here is an example of how to use the library to solve the OneMax problem:
+## Quick start
+
+The library includes the OneMax problem, which looks for a string of bits that are all `1`.
+This runs the genetic algorithm on it with the default parameters:
+
+```rust
+use rusty_genes::one_max::*;
+use rusty_genes::*;
+
+let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
+    .expect("the default parameters are valid")
+    .into_evolution()
+    .with_seed(42);
+
+// Evolve 100-bit strings until one has only '1' bits, or for at most 200 generations.
+let solution = evolution
+    .run(&100, |population| {
+        population.fittest().fitness() < 1.0 && population.generation() < 200
+    })
+    .expect("random OneMax individuals are valid");
+
+println!("Best fitness: {}", solution.fitness());
+```
+
+`run` creates a random initial population and calls the closure before each generation, which
+decides whether to continue. It returns the fittest individual of the last generation. With the
+seed, every run gives the same result; without it, each run is seeded from the operating
+system.
+
+## Defining your own problem
+
+A problem consists of an individual, which holds a candidate solution and its fitness, and a
+model, which creates, combines, varies, and evaluates individuals. This example evolves a
+permutation of the numbers `0..n` towards ascending order:
 
 ```rust
 use rusty_genes::*;
-use rand::{distributions::Standard, prelude::*};
 
-/// Represents an individual in the OneMax problem.
-///
-/// The `genome` is a binary string represented as a vector of booleans. Each boolean
-/// represents a bit, and the fitness of an individual is the ratio of 'true' bits to
-/// the total number of bits in this binary string.
 #[derive(Debug, Clone, PartialEq)]
-pub struct OneMax {
-    genome: Vec<bool>,
+struct Arrangement {
+    order: Vec<usize>,
     fitness: f64,
 }
 
-impl OneMax {
-    // Returns the binary string of the individual.
-    pub fn genome(&self) -> &[bool] {
-        &self.genome
-    }
-}
-
-/// Conversion from a `Vec<bool>` to a `OneMax` individual.
-///
-/// This allows a binary string to be directly converted into an individual.
-impl From<Vec<bool>> for OneMax {
-    fn from(genome: Vec<bool>) -> Self {
-        Self {
-            genome,
-            fitness: 0.0,
-        }
-    }
-}
-
-/// Implements the method required by the [`Individual`] trait for the OneMax problem.
-impl Individual for OneMax {
-    /// Returns the fitness of the individual.
+impl Individual for Arrangement {
     fn fitness(&self) -> f64 {
         self.fitness
     }
 }
 
-/// Allows the creation of a new random individual for the OneMax problem.
-impl RandomIndividual<usize> for OneMax {
-    /// Generates a new random individual for the OneMax problem.
-    ///
-    /// The `length` parameter determines the length of the binary string (i.e., the genome),
-    /// and the `rng` parameter is a random number generator used to generate the binary string.
-    fn new_random<R: Rng>(length: &usize, rng: &mut R) -> Self {
-        let bits = rng.sample_iter(Standard);
-        let genome = Vec::from_iter(bits.take(*length));
-        Self::from(genome)
+// The argument is the number of items to arrange.
+impl RandomIndividual<usize> for Arrangement {
+    fn new_random(len: &usize, rng: &mut Rng) -> Self {
+        let mut order = (0..*len).collect::<Vec<_>>();
+        rng.shuffle(&mut order);
+        Self { order, fitness: 0.0 }
     }
 }
 
-/// The evolutionary model for the OneMax problem.
-///
-/// This struct provides methods for crossover, mutation, and evaluation operations specific
-/// to the OneMax problem.
-#[derive(Debug, Default)]
-pub struct OneMaxEvolutionModel;
+struct Sorting;
 
-/// Implements the methods required by the [`EvolutionModel`] trait for the OneMax problem.
-impl EvolutionModel for OneMaxEvolutionModel {
-    type Individual = OneMax;
-    type Rng = SmallRng;
+impl EvolutionModel for Sorting {
+    type Individual = Arrangement;
 
-    /// Creates a new random number generator from entropy.
-    fn rng() -> Self::Rng {
-        SmallRng::from_entropy()
+    fn crossover(&self, a: &Arrangement, b: &Arrangement, rng: &mut Rng) -> Arrangement {
+        let order = CrossoverStrategy::PartiallyMapped.crossover(&a.order, &b.order, rng);
+        Arrangement { order, fitness: 0.0 }
     }
 
-    /// Performs a single point crossover on the parents' genomes to create a new individual.
-    fn crossover(
-        &self,
-        parent1: &Self::Individual,
-        parent2: &Self::Individual,
-        rng: &mut Self::Rng,
-    ) -> Self::Individual {
-        CrossoverStrategy::SinglePoint
-            .crossover(&parent1.genome, &parent2.genome, rng)
-            .into()
+    fn mutate(&self, individual: &mut Arrangement, rng: &mut Rng) {
+        MutationStrategy::Swap.mutate(&mut individual.order, rng);
     }
 
-    /// Mutates the individual's genome by using the duplicate mutation strategy.
-    fn mutate(&self, individual: &mut Self::Individual, rng: &mut Self::Rng) {
-        MutationStrategy::Duplicate.mutate(&mut individual.genome, rng);
-    }
-
-    /// Evaluates the individual's fitness by calculating the ratio of `true` bits to the total
-    /// number of bits in its genome.
-    fn evaluate(&self, individual: &mut Self::Individual) {
-        let one_bits = individual.genome.iter().filter(|&&one| one).count();
-        let total_bits = individual.genome.len();
-        individual.fitness = one_bits as f64 / total_bits as f64;
+    // The fitness is the share of the numbers that are in their place.
+    fn evaluate(&self, individual: &mut Arrangement) {
+        let in_place = individual.order.iter().enumerate().filter(|(i, n)| i == *n).count();
+        individual.fitness = in_place as f64 / individual.order.len() as f64;
     }
 }
 
-// Create an instance of the evolutionary model.
-let one_max = OneMaxEvolutionModel;
+let mut parameters = GeneticAlgorithmParameters::default();
+parameters.selection_strategy = SelectionStrategy::Tournament(3);
+let mut evolution = GeneticAlgorithm::new(Sorting, parameters)
+    .expect("the parameters are valid")
+    .into_evolution();
+let solution = evolution
+    .run(&20, |population| population.generation() < 100)
+    .expect("random arrangements are valid");
 
-// Use the Genetic Algorithm to solve the problem.
-let ga = GeneticAlgorithm::build_evolution(one_max);
-
-// Use default parameters of the Genetic Algorithm.
-let ga_params = GeneticAlgorithmParameters::default();
-
-// Run the algorithm until the fitness of the fittest individual is close to 1 or
-// the number of generations exceeds 100.
-let solution = ga.run(&ONE_MAX_LENGTH, &ga_params, |population| {
-    population.fittest().fitness() < 0.999999 && population.generation() <= 100
-});
-
-// Verify that the solution is correct.
-assert!(solution.genome().iter().all(|&one| one == true));
+println!("{:?} has fitness {}", solution.order, solution.fitness());
 ```
 
-## Acknowledgement
+Keep these in mind when you define a model:
 
-This project was a collaborative effort. OpenAI's AI, [ChatGPT-4](https://openai.com/product/gpt-4), assisted with both the documentation and the implementation.
+- The library maximizes fitness. For a minimization problem, give better solutions a higher
+  score, for example by negating the cost.
+- An individual whose fitness is not finite is invalid and never joins the population. Override
+  `Individual::is_valid` to reject other infeasible solutions.
+- Individuals are bred and evaluated on several threads, so the model must be `Sync`.
+- The model describes the problem only; the algorithm decides how parents are selected and
+  which offspring survive.
+
+## Customizing breeding
+
+The algorithms breed offspring through a `Reproduction`, which selects parents, applies the
+model's operators, and keeps an offspring only if its survival policy accepts it. Both parts can
+be replaced, including by your own implementations of `SelectionMechanism` and
+`SurvivalPolicy`:
+
+```rust
+use rusty_genes::one_max::*;
+use rusty_genes::*;
+
+let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
+    .expect("the default parameters are valid");
+
+// Every valid offspring survives, instead of only those at least as fit as their fittest parent.
+ga.reproduction_mut().set_survival(Generational);
+ga.reproduction_mut()
+    .set_selector(TournamentSelection::new(4).expect("the size is positive"));
+
+let solution = ga
+    .into_evolution()
+    .run(&100, |population| population.generation() < 50)
+    .expect("random OneMax individuals are valid");
+
+println!("Best fitness: {}", solution.fitness());
+```
+
+## Documentation
+
+The [API documentation](https://docs.rs/rusty_genes) describes every algorithm, operator, and
+parameter, and the [changelog](CHANGELOG.md) lists the changes in each release.
 
 ## License
 
 RustyGenes is licensed under the [MIT License](LICENSE).
 
-This project is still in its early stages and is open to contributions. Please feel free to raise issues or submit pull requests.
-
 ## Disclaimer
 
-This is the initial release and may be subject to change as the project evolves. Please use it at your own risk.
+RustyGenes is still evolving, and its API may change between releases. Please use it at your own
+risk.

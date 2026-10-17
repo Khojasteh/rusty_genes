@@ -67,6 +67,10 @@ pub use reproduction::*;
 pub use rng::*;
 pub use stats::*;
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
 /// Returns the value at `ratio` of the way from `min` to `max`, where a ratio of 0.0 gives `min`
 /// and 1.0 gives `max`.
 #[inline]
