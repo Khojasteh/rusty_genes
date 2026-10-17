@@ -11,6 +11,7 @@ use super::*;
 /// strategies can be more effective. Therefore, it is often beneficial to have several mutation
 /// strategies available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MutationStrategy {
     /// Swap Mutation exchanges the positions of two randomly chosen elements in the genetic material.
     /// This mutation operator is effective at making small changes in the solution structure,
@@ -45,13 +46,14 @@ impl MutationStrategy {
     ///
     /// # Arguments
     /// * `genome` - The sequence of genes to be mutated. This could represent a solution
-    ///    in the problem space.
+    ///   in the problem space.
     /// * `rng` - A random number generator for use in stochastic processes.
     ///
     /// # Note
-    /// The mutation operation directly modifies the `genome` in place.
+    /// The mutation operation directly modifies the `genome` in place. A genome with fewer than
+    /// two genes is left unchanged.
     #[inline]
-    pub fn mutate<G: Copy, R: Rng>(&self, genome: &mut [G], rng: &mut R) {
+    pub fn mutate<G: Copy>(&self, genome: &mut [G], rng: &mut Rng) {
         match self {
             Self::Swap => swap_mutation(genome, rng),
             Self::Scramble => scramble_mutation(genome, rng),
@@ -62,15 +64,15 @@ impl MutationStrategy {
     }
 }
 
-/// Performs a swap mutation on the given genome.
+/// Exchanges the positions of two randomly chosen genes of the given genome.
 ///
 /// This mutation operator is effective at making small changes in the solution structure,
 /// allowing for local search and fine-tuning of the solution.
 ///
 /// # Arguments
 /// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///    problem space.
-/// * `rng` - A mutable reference to a random number generator implementing the Rng trait
+///   problem space.
+/// * `rng` - A mutable reference to a random number generator
 ///
 /// # Note
 /// Swap mutation is applicable to permutation-based problems.
@@ -78,17 +80,19 @@ impl MutationStrategy {
 /// # Example
 /// ```
 /// use rusty_genes::*;
-/// use rand::prelude::*;
 ///
-/// let mut rng = SmallRng::seed_from_u64(999);
-/// let mut genome = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let original = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let mut genome = original.clone();
 ///
-/// swap_mutation(&mut genome, &mut rng);
+/// swap_mutation(&mut genome, &mut Rng::from_seed(1));
 ///
-/// assert_eq!(genome, vec![0, 1, 6, 3, 4, 5, 2, 7, 8, 9]);
+/// let changed = (0..10).filter(|&i| genome[i] != original[i]).collect::<Vec<_>>();
+/// assert_eq!(changed.len(), 2);
+/// assert_eq!(genome[changed[0]], original[changed[1]]);
+/// assert_eq!(genome[changed[1]], original[changed[0]]);
 /// ```
 #[inline]
-pub fn swap_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
+pub fn swap_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     let n = genome.len();
     if n < 2 {
         return;
@@ -98,15 +102,16 @@ pub fn swap_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
     genome.swap(p1, p2);
 }
 
-/// Shuffles the elements within a randomly selected subset of the given genetic material.
+/// Shuffles the genes within a randomly selected range, of at least two genes, of the given
+/// genome.
 ///
 /// This mutation operator is useful for introducing larger-scale changes in the solution,
 /// promoting exploration and diversity in the population.
 ///
 /// # Arguments
 /// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///    problem space.
-/// * `rng` - A mutable reference to a random number generator implementing the Rng trait
+///   problem space.
+/// * `rng` - A mutable reference to a random number generator
 ///
 /// # Note
 /// Scramble mutation is applicable to permutation-based problems.
@@ -114,36 +119,36 @@ pub fn swap_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 /// # Example
 /// ```
 /// use rusty_genes::*;
-/// use rand::prelude::*;
 ///
-/// let mut rng = SmallRng::seed_from_u64(999);
 /// let mut genome = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 ///
-/// scramble_mutation(&mut genome, &mut rng);
+/// scramble_mutation(&mut genome, &mut Rng::from_seed(1));
 ///
-/// assert_eq!(genome, vec![0, 5, 6, 1, 2, 3, 4, 7, 8, 9]);
+/// let mut genes = genome.clone();
+/// genes.sort_unstable();
+/// assert_eq!(genes, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
 /// ```
 #[inline]
-pub fn scramble_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
+pub fn scramble_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     let n = genome.len();
     if n < 2 {
         return;
     }
 
     let range = bounded_random_range(n, 2, n, rng);
-    genome[range].shuffle(rng);
+    rng.shuffle(&mut genome[range]);
 }
 
-/// Reverses the order of the elements within a randomly selected subset of the given genetic
-/// material.
+/// Reverses the order of the genes within a randomly selected range, of at least two genes, of
+/// the given genome.
 ///
 /// This mutation operator can introduce both small and large changes in the solution, balancing
 /// exploration and exploitation in the search process.
 ///
 /// # Arguments
 /// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///    problem space.
-/// * `rng` - A mutable reference to a random number generator implementing the Rng trait
+///   problem space.
+/// * `rng` - A mutable reference to a random number generator
 ///
 /// # Note
 /// Inversion mutation is applicable to permutation-based problems.
@@ -151,17 +156,18 @@ pub fn scramble_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 /// # Example
 /// ```
 /// use rusty_genes::*;
-/// use rand::prelude::*;
 ///
-/// let mut rng = SmallRng::seed_from_u64(999);
-/// let mut genome = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let original = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let mut genome = original.clone();
 ///
-/// inversion_mutation(&mut genome, &mut rng);
+/// inversion_mutation(&mut genome, &mut Rng::from_seed(1));
 ///
-/// assert_eq!(genome, vec![0, 6, 5, 4, 3, 2, 1, 7, 8, 9]);
+/// let start = (0..10).position(|i| genome[i] != original[i]).unwrap();
+/// let end = (0..10).rposition(|i| genome[i] != original[i]).unwrap() + 1;
+/// assert!(genome[start..end].iter().eq(original[start..end].iter().rev()));
 /// ```
 #[inline]
-pub fn inversion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
+pub fn inversion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     let n = genome.len();
     if n < 2 {
         return;
@@ -171,16 +177,16 @@ pub fn inversion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
     genome[range].reverse();
 }
 
-/// Removes a gene from a random position in the genome and insert it in another position. This
-/// results in the shifting of the rest of the genes between two positions.
+/// Removes a gene from a random position in the genome and inserts it at another position. This
+/// results in the shifting of the rest of the genes between the two positions.
 ///
 /// The mutation operator can introduce a small local rearrangement of genes which can be particularly
 /// useful in permutation-based problems where the relative ordering of genes is important.
 ///
 /// # Arguments
 /// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///    problem space.
-/// * `rng` - A mutable reference to a random number generator implementing the Rng trait
+///   problem space.
+/// * `rng` - A mutable reference to a random number generator
 ///
 /// # Note
 /// Insertion mutation is applicable to permutation-based problems.
@@ -188,17 +194,20 @@ pub fn inversion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 /// # Example
 /// ```
 /// use rusty_genes::*;
-/// use rand::prelude::*;
 ///
-/// let mut rng = SmallRng::seed_from_u64(999);
-/// let mut genome = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let original = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let mut genome = original.clone();
 ///
-/// insertion_mutation(&mut genome, &mut rng);
+/// insertion_mutation(&mut genome, &mut Rng::from_seed(1));
 ///
-/// assert_eq!(genome, vec![0, 1, 6, 2, 3, 4, 5, 7, 8, 9]);
+/// let start = (0..10).position(|i| genome[i] != original[i]).unwrap();
+/// let end = (0..10).rposition(|i| genome[i] != original[i]).unwrap() + 1;
+/// let mut rotated = original[start..end].to_vec();
+/// rotated.rotate_right(1);
+/// assert_eq!(genome[start..end], rotated);
 /// ```
 #[inline]
-pub fn insertion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
+pub fn insertion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     let n = genome.len();
     if n < 2 {
         return;
@@ -219,8 +228,8 @@ pub fn insertion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 ///
 /// # Arguments
 /// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///    problem space.
-/// * `rng` - A mutable reference to a random number generator implementing the Rng trait
+///   problem space.
+/// * `rng` - A mutable reference to a random number generator
 ///
 /// # Note
 /// Duplicate mutation is not applicable to permutation-based problems where each gene should be unique.
@@ -228,17 +237,18 @@ pub fn insertion_mutation<G, R: Rng>(genome: &mut [G], rng: &mut R) {
 /// # Example
 /// ```
 /// use rusty_genes::*;
-/// use rand::prelude::*;
 ///
-/// let mut rng = SmallRng::seed_from_u64(999);
-/// let mut genome = vec!['G', 'T', 'A', 'G', 'C'];
+/// let original = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+/// let mut genome = original.clone();
 ///
-/// duplicate_mutation(&mut genome, &mut rng);
+/// duplicate_mutation(&mut genome, &mut Rng::from_seed(1));
 ///
-/// assert_eq!(genome, vec!['G', 'T', 'A', 'A', 'C']);
+/// let changed = (0..10).filter(|&i| genome[i] != original[i]).collect::<Vec<_>>();
+/// assert_eq!(changed.len(), 1);
+/// assert_eq!(genome.iter().filter(|&&gene| gene == genome[changed[0]]).count(), 2);
 /// ```
 #[inline]
-pub fn duplicate_mutation<G: Copy, R: Rng>(genome: &mut [G], rng: &mut R) {
+pub fn duplicate_mutation<G: Copy>(genome: &mut [G], rng: &mut Rng) {
     let n = genome.len();
     if n < 2 {
         return;

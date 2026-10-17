@@ -1,57 +1,52 @@
 use super::*;
 
-/// Represents the parameters used in a genetic algorithm.
+/// Represents the parameters of a [`GeneticAlgorithm`].
 ///
 /// # Note
-/// The `GeneticAlgorithmParameters` struct contains the various parameters and options that control
-/// the behavior of a genetic algorithm. These settings include the maximum number of generations
-/// to run the algorithm, the crossover rate and mutation rate used in the genetic operators, and
-/// the size of the population used in the algorithm.
+/// The parameters are validated when a [`GeneticAlgorithm`] is created with them. How long the
+/// algorithm runs is decided by the `progress` closure given to the methods of [`Evolution`].
+///
+/// New parameters may be added in the future, so the parameters are created by
+/// [`Default::default`] and then changed as needed.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneticAlgorithmParameters {
-    /// The number of individuals in the population.
+    /// The number of individuals in a full generation.
     ///
     /// # Note
-    /// `population_size` is a positive integer that determines the size of the population
-    /// used in the genetic algorithm. A larger population size can help improve the diversity
-    /// of the population and reduce the risk of premature convergence, but it can also increase
-    /// the computational cost of the algorithm.
+    /// `population_size` must be positive. A larger population can improve the diversity of the
+    /// population and reduce the risk of premature convergence, but it also increases the
+    /// computational cost of the algorithm.
     pub population_size: usize,
 
-    /// The proportion of the fittest individuals in the current population that are directly carried
-    /// over to the next generation.
+    /// The proportion of the fittest individuals in the current generation that are directly
+    /// carried over to the next generation.
     ///
     /// # Note
-    /// `elitism_rate` is a floating-point value between 0.0 and 1.0, excluding. A value of 0 means no
-    /// elitism (i.e., all individuals in the next generation are produced by crossover and mutation), while
-    /// a value close to 1 means high elitism (i.e., most of the individuals in the next generation are the
-    /// fittest ones from the current generation).
+    /// `elitism_rate` must be between 0.0 (inclusive) and 1.0 (exclusive). A value of 0.0 means
+    /// no elitism, i.e. all individuals of the next generation are bred, while a value close to
+    /// 1.0 means that most individuals of the next generation are the fittest ones of the
+    /// current generation. The number of elites is rounded down.
     ///
-    /// Elitism ensures that the fittest individuals are preserved from generation to generation, aiding
-    /// in overall performance improvement of the population over time. However, setting this value too
-    /// high may limit the diversity of the population and could lead to premature convergence.
+    /// Elitism preserves the fittest individuals from generation to generation. However, a high
+    /// value may limit the diversity of the population and lead to premature convergence.
     pub elitism_rate: f64,
 
-    /// The probability of two individuals combining their genetic information to produce offspring.
+    /// The probability of two individuals combining their genetic information to produce an
+    /// offspring.
     ///
     /// # Note
-    /// `crossover_rate` is a floating-point value between 0.0 and 1.0, inclusive. A higher value
-    /// increases the likelihood of crossover events occurring.
+    /// `crossover_rate` must be between 0.0 and 1.0, inclusive.
     pub crossover_rate: f64,
 
-    /// The probability of an individual undergoing the mutation process.
+    /// The probability of an offspring undergoing mutation.
     ///
     /// # Note
-    /// `mutation_rate` is a floating-point value between 0.0 and 1.0, inclusive. A higher value
-    /// increases the likelihood of mutations occurring, which can introduce more genetic diversity
-    /// in the population.
+    /// `mutation_rate` must be between 0.0 and 1.0, inclusive. A higher value introduces more
+    /// genetic diversity into the population.
     pub mutation_rate: f64,
 
-    /// The selection strategy used to select individuals from the population.
-    ///
-    /// # Note
-    /// The selection strategy is an important aspect of an evolutionary algorithm. It determines how
-    /// individuals are chosen from the population for reproduction and thereby, influences the diversity
-    /// and convergence speed of the algorithm.
+    /// The strategy for selecting parents from the population.
     pub selection_strategy: SelectionStrategy,
 }
 
@@ -75,38 +70,40 @@ impl Default for GeneticAlgorithmParameters {
     }
 }
 
-impl EvolutionParameters for GeneticAlgorithmParameters {
-    fn initial_population_size(&self) -> usize {
-        self.population_size
-    }
-
-    fn max_population_size(&self) -> usize {
-        self.population_size
-    }
-
-    fn validate(&self) {
-        assert!(self.population_size != 0);
-        assert!((0.0..1.0).contains(&self.elitism_rate));
-        assert!((0.0..=1.0).contains(&self.crossover_rate));
-        assert!((0.0..=1.0).contains(&self.mutation_rate));
+impl GeneticAlgorithmParameters {
+    /// Validates the parameters.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] for the first parameter that is outside
+    /// of its valid domain.
+    pub fn validate(&self) -> Result<(), EvolutionError> {
+        if self.population_size == 0 {
+            return Err(EvolutionError::invalid_parameter(
+                "population_size",
+                "must be positive",
+            ));
+        }
+        check_ratio("elitism_rate", self.elitism_rate)?;
+        check_probability("crossover_rate", self.crossover_rate)?;
+        check_probability("mutation_rate", self.mutation_rate)?;
+        self.selection_strategy.validate()
     }
 }
 
 /// A genetic algorithm for evolving populations towards better fitness values.
 ///
 /// # Note
-/// This struct implements a standard genetic algorithm that relies on fixed parameters, such as
-/// survival, crossover, and mutation rates, throughout the evolution process. These parameters
-/// remain constant during the entire optimization process.
+/// This algorithm keeps its crossover and mutation rates fixed throughout the evolution process.
 ///
-/// The algorithm operates on an [`EvolutionModel`] which defines the problem-specific components
-/// such as crossover and mutation operators, as well as the fitness function for evaluating
-/// individuals in the population.
+/// The algorithm operates on an [`EvolutionModel`], which defines the problem-specific
+/// components such as the crossover and mutation operators, and the fitness function.
 ///
-/// While the `GeneticAlgorithm` can be effective in solving optimization problems, it may not be as
-/// well-suited to tackle complex problems with varying search landscapes and diverse solution spaces
-/// compared to adaptive genetic algorithms that dynamically adjust their parameters during the
-/// iterations.
+/// The algorithm breeds its offspring by a [`Reproduction`], whose parent selector and survival
+/// policy can be replaced through [`reproduction_mut`](GeneticAlgorithm::reproduction_mut).
+///
+/// While the `GeneticAlgorithm` can be effective in solving optimization problems, the
+/// [`AdaptiveGeneticAlgorithm`], which adjusts its rates to the diversity of the population,
+/// may be better suited to problems with varying search landscapes.
 ///
 /// # Example
 /// ```
@@ -115,31 +112,68 @@ impl EvolutionParameters for GeneticAlgorithmParameters {
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
-/// let one_max = OneMaxEvolutionModel;
-/// let ga = GeneticAlgorithm::build_evolution(one_max);
-/// let ga_params = GeneticAlgorithmParameters {
-///     crossover_rate: 0.7,
-///     mutation_rate: 0.2,
-///     selection_strategy: SelectionStrategy::Linear(1.25),
-///     ..Default::default()
-/// };
+/// let mut ga_params = GeneticAlgorithmParameters::default();
+/// ga_params.crossover_rate = 0.7;
+/// ga_params.mutation_rate = 0.2;
+/// ga_params.selection_strategy = SelectionStrategy::Linear(1.25);
+/// let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, ga_params)?.into_evolution();
 ///
-/// let solution = ga.run(&ONE_MAX_LENGTH, &ga_params, |population| {
-///     population.fittest().fitness() < 0.999999 && population.generation() <= 100
-/// });
+/// let solution = ga.run(&ONE_MAX_LENGTH, |population| {
+///     population.fittest().fitness() < 1.0 && population.generation() <= 200
+/// })?;
 ///
-/// assert!(solution.genome().iter().all(|&one| one == true));
+/// assert!(solution.genome().iter().all(|&one| one));
+/// # Ok::<(), EvolutionError>(())
 /// ```
-/// Implements the fundamental tasks in a genetic algorithm.
 pub struct GeneticAlgorithm<M: EvolutionModel> {
     model: M,
-    population_size: usize,
-    elite_size: usize,
-    breeding: ReproductionParameters<M>,
+    parameters: GeneticAlgorithmParameters,
+    elite_count: usize,
+    reproduction: Reproduction<M::Individual>,
 }
 
-impl<M: EvolutionModel> EvolutionAlgorithm<M> for GeneticAlgorithm<M> {
-    type Parameters = GeneticAlgorithmParameters;
+impl<M: EvolutionModel> GeneticAlgorithm<M> {
+    /// Creates a genetic algorithm that operates on `model` with the given parameters.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if a parameter is invalid.
+    pub fn new(model: M, parameters: GeneticAlgorithmParameters) -> Result<Self, EvolutionError> {
+        parameters.validate()?;
+        let reproduction = Reproduction::from_strategy(
+            parameters.selection_strategy,
+            parameters.crossover_rate,
+            parameters.mutation_rate,
+        )?;
+        Ok(Self {
+            model,
+            elite_count: elite_count(parameters.population_size, parameters.elitism_rate),
+            parameters,
+            reproduction,
+        })
+    }
+
+    /// Returns the parameters the algorithm was created with.
+    #[inline]
+    pub fn parameters(&self) -> &GeneticAlgorithmParameters {
+        &self.parameters
+    }
+
+    /// Returns the reproduction that breeds the offspring.
+    #[inline]
+    pub fn reproduction(&self) -> &Reproduction<M::Individual> {
+        &self.reproduction
+    }
+
+    /// Returns the reproduction that breeds the offspring, to replace its parent selector or
+    /// survival policy, or to change its rates.
+    #[inline]
+    pub fn reproduction_mut(&mut self) -> &mut Reproduction<M::Individual> {
+        &mut self.reproduction
+    }
+}
+
+impl<M: EvolutionModel> EvolutionAlgorithm for GeneticAlgorithm<M> {
+    type Model = M;
 
     #[inline]
     fn model(&self) -> &M {
@@ -147,19 +181,16 @@ impl<M: EvolutionModel> EvolutionAlgorithm<M> for GeneticAlgorithm<M> {
     }
 
     #[inline]
-    fn reproduction_parameters(&self) -> (&ReproductionParameters<M>, usize) {
-        (&self.breeding, self.population_size)
+    fn population_size(&self) -> usize {
+        self.parameters.population_size
     }
 
-    #[inline]
-    fn configure(&mut self, parameters: &GeneticAlgorithmParameters) {
-        parameters.validate();
-
-        self.population_size = parameters.population_size;
-        self.elite_size = interpolate_usize(0, parameters.population_size, parameters.elitism_rate);
-        self.breeding.crossover_rate = parameters.crossover_rate;
-        self.breeding.mutation_rate = parameters.mutation_rate;
-        self.breeding.parent_selector = parameters.selection_strategy.create_selector();
+    fn prepare_generation(&mut self, population: &Population<M::Individual>) {
+        if population.generation() == 0 {
+            self.reproduction.reset();
+        }
+        self.model.prepare(population);
+        self.reproduction.prepare(population);
     }
 
     #[inline]
@@ -168,32 +199,18 @@ impl<M: EvolutionModel> EvolutionAlgorithm<M> for GeneticAlgorithm<M> {
         population: &Population<M::Individual>,
         elites: &mut Vec<M::Individual>,
     ) {
-        if self.elite_size != 0 {
-            let range_start = population.len().saturating_sub(self.elite_size);
-            elites.extend(population[range_start..].iter().cloned());
-        }
+        select_fittest(population, self.elite_count, elites);
     }
 
     #[inline]
-    fn prepare_for_next_population(&mut self, population: &Population<M::Individual>) {
-        self.model.pre_generation(population, &mut self.breeding);
-        self.breeding.parent_selector.prepare(population);
-    }
-}
-
-impl<M: EvolutionModel> From<M> for GeneticAlgorithm<M> {
-    fn from(model: M) -> Self {
-        Self {
-            model,
-            population_size: Default::default(),
-            elite_size: Default::default(),
-            breeding: Default::default(),
-        }
-    }
-}
-
-impl<M: EvolutionModel + Default> Default for GeneticAlgorithm<M> {
-    fn default() -> Self {
-        Self::from(M::default())
+    fn generate_offspring(
+        &self,
+        population: &Population<M::Individual>,
+        offspring: &mut Vec<M::Individual>,
+        rng: &mut Rng,
+    ) {
+        let size = self.population_size();
+        self.reproduction
+            .breed_into(&self.model, population, offspring, size, rng);
     }
 }

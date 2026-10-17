@@ -207,8 +207,8 @@ impl Stats {
 impl FromIterator<f64> for Stats {
     fn from_iter<I: IntoIterator<Item = f64>>(iter: I) -> Self {
         let mut samples = iter.into_iter();
-        let Some (first_sample) = samples.next() else {
-            return Default::default()
+        let Some(first_sample) = samples.next() else {
+            return Default::default();
         };
 
         let mut count = 1;
@@ -392,14 +392,16 @@ impl TryFrom<Stats> for PopulatedStats {
 impl std::fmt::Display for PopulatedStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(p) = f.precision() {
-            write!(f,
+            write!(
+                f,
                 "Samples: {}; Min: {:.p$}; Max: {:.p$}; Average: {:.p$}; Variance: {:.p$}; STD: {:.p$}",
                 self.count(),
                 self.min(),
                 self.max(),
                 self.avg(),
                 self.var(),
-                self.std())
+                self.std()
+            )
         } else {
             write!(
                 f,

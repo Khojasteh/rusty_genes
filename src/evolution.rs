@@ -1,210 +1,220 @@
 use super::*;
-use object_pool::Pool;
-use std::cell::RefCell;
+use rayon::prelude::*;
 
-/// The `Evolution` struct is the primary user-facing interface for running an evolutionary algorithm.
+/// The `Evolution` struct is the primary user-facing interface for running an evolutionary
+/// algorithm.
 ///
-/// It wraps an implementation of the [`EvolutionAlgorithm`] trait and provides functionality for the
-/// algorithm to be run in various ways, such as from a random initial population, from a single initial
-/// individual, or from an initial population.
+/// It owns an implementation of the [`EvolutionAlgorithm`] trait and runs it generation by
+/// generation, starting from a random initial population, from a single individual, or from
+/// a given initial population.
+///
+/// # Reproducibility
+/// Without a seed, every run is seeded from the operating system. With a seed, set by
+/// [`with_seed`](Evolution::with_seed), every run starts from the same random state, so runs of
+/// the same algorithm and model from the same input produce the same result with the same
+/// version of this library, on any number of threads. This holds as long as the model and the
+/// algorithm are deterministic apart from the random number generators they are given.
 ///
 /// # Type parameters
-/// * `A` - Represents the core mechanism of an evolutionary algorithm.
-/// * `M` - Represents the model of the evolutionary algorithm.
-pub struct Evolution<A, M>
-where
-    A: EvolutionAlgorithm<M>,
-    M: EvolutionModel,
-{
-    algorithm: RefCell<A>,
-    _marker: std::marker::PhantomData<M>,
+/// * `A` - The evolutionary algorithm to run.
+///
+/// # Example
+/// ```
+/// use rusty_genes::*;
+/// use rusty_genes::one_max::*;
+///
+/// let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())?
+///     .into_evolution()
+///     .with_seed(42);
+///
+/// let best = evolution.run(&50, |population| population.generation() < 10)?;
+/// assert_eq!(best.genome().len(), 50);
+/// # Ok::<(), EvolutionError>(())
+/// ```
+pub struct Evolution<A: EvolutionAlgorithm> {
+    algorithm: A,
+    seed: Option<u64>,
 }
 
-impl<A, M> Evolution<A, M>
-where
-    A: EvolutionAlgorithm<M>,
-    M: EvolutionModel,
-{
+impl<A: EvolutionAlgorithm> Evolution<A> {
+    /// Creates an `Evolution` that runs `algorithm`, without a seed.
+    #[inline]
+    pub fn new(algorithm: A) -> Self {
+        Self {
+            algorithm,
+            seed: None,
+        }
+    }
+
+    /// Sets the seed of the runs, and returns the `Evolution`.
+    #[inline]
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
+    }
+
+    /// Returns the seed of the runs, if any.
+    #[inline]
+    pub fn seed(&self) -> Option<u64> {
+        self.seed
+    }
+
+    /// Sets the seed of the runs, or removes it with [`None`], so that runs are seeded from the
+    /// operating system.
+    #[inline]
+    pub fn set_seed(&mut self, seed: Option<u64>) {
+        self.seed = seed;
+    }
+
+    /// Returns a reference to the algorithm.
+    #[inline]
+    pub fn algorithm(&self) -> &A {
+        &self.algorithm
+    }
+
+    /// Returns a mutable reference to the algorithm.
+    #[inline]
+    pub fn algorithm_mut(&mut self) -> &mut A {
+        &mut self.algorithm
+    }
+
+    /// Consumes the `Evolution` and returns the algorithm.
+    #[inline]
+    pub fn into_algorithm(self) -> A {
+        self.algorithm
+    }
+
     /// Runs the evolutionary algorithm with a random initial population.
     ///
     /// # Arguments
-    /// * `args` - A reference to the domain-specific arguments for generating the random individuals.
-    /// * `parameters` - A reference to the algorithm's parameters.
-    /// * `progress` - A closure that is called for each generation. The closure receives the current state of
-    ///    the population, which includes information such as the generation number, the number of generations
-    ///    without improvement (stagnation), and statistical information regarding the fitness scores of the
-    ///    individuals in the population. The closure should return a boolean indicating whether the algorithm
-    ///    should continue ([`true`]) or terminate ([`false`]).
-    ///
-    /// # Type Parameters
-    /// * `T` - The type of domain-specific arguments for generating the random individuals.
-    /// * `F` - The type of progress closure.
+    /// * `args` - A reference to the domain-specific arguments for generating the random
+    ///   individuals by [`RandomIndividual::new_random`].
+    /// * `progress` - A closure that is called before each generation is bred. It receives the
+    ///   current population, which provides the generation number, the number of generations
+    ///   without improvement (stagnation), and the statistics of the fitness scores. The closure
+    ///   returns whether the algorithm should continue ([`true`]) or stop ([`false`]).
     ///
     /// # Returns
-    /// The individual with the best fitness score that was found during the execution of the algorithm.
+    /// The fittest individual of the last generation.
     ///
-    /// # Panics
-    /// This method will panic if the initial population size is zero or no valid individual could be generated.
-    pub fn run<T, F>(&self, args: &T, parameters: &A::Parameters, progress: F) -> M::Individual
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual could be generated.
+    pub fn run<T, F>(&mut self, args: &T, progress: F) -> Result<IndividualOf<A>, EvolutionError>
     where
         T: Sync,
-        M::Individual: RandomIndividual<T>,
-        F: FnMut(&Population<M::Individual>) -> bool,
+        IndividualOf<A>: RandomIndividual<T>,
+        F: FnMut(&Population<IndividualOf<A>>) -> bool,
     {
-        let mut individuals = Vec::with_capacity(parameters.max_population_size());
-        self.algorithm.borrow().model().extend_population(
-            &mut individuals,
-            parameters.initial_population_size(),
-            args,
-        );
-        self.evolve_population(individuals, parameters, progress)
-            .take_fittest()
+        let mut rng = self.new_rng();
+        let streams = rng.split();
+        let individuals = (0..self.algorithm.population_size())
+            .into_par_iter()
+            .map(|index| IndividualOf::<A>::new_random(args, &mut streams.rng(index as u64)))
+            .collect();
+        self.evolve(individuals, progress, &mut rng)
+            .map(Population::take_fittest)
     }
 
-    /// Runs the evolutionary algorithm with an initial population based on a single individual.
+    /// Runs the evolutionary algorithm with an initial population made of `individual` and its
+    /// mutated copies.
     ///
     /// # Arguments
-    /// * `individual` - The individual to use for generating the initial population.
-    /// * `parameters` - A reference to the algorithm's parameters.
-    /// * `progress` - A closure that is called for each generation. The closure receives the current population
-    ///    and the current state of the algorithm, which includes information such as the generation number, the
-    ///    number of generations without improvement (stagnation), and statistical information regarding the fitness
-    ///    scores of the individuals in the population. The closure should return a boolean indicating whether the
-    ///    algorithm should continue ([`true`]) or terminate ([`false`]).
-    ///
-    /// # Type Parameters
-    /// * `F` - The type of progress closure.
+    /// * `individual` - The individual to build the initial population from.
+    /// * `progress` - A closure that is called before each generation is bred. See
+    ///   [`run`](Evolution::run) for details.
     ///
     /// # Returns
-    /// The individual with the best fitness score that was found during the execution of the algorithm.
+    /// The fittest individual of the last generation.
     ///
-    /// # Panics
-    /// This method will panic if the initial population size is zero or no valid individual could be generated.
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if the initial population has no valid
+    /// individual.
     ///
     /// # Note
-    /// This method is intended to be used when a good initial individual has already been found. The
-    /// method takes advantage of the fact that the genetic information of the initial individual is
-    /// likely to be valuable in generating high-quality offspring.
+    /// This method is intended to be used when a good individual has already been found, so its
+    /// genetic information is likely to be valuable in generating high-quality offspring. The
+    /// copies are mutated by [`EvolutionModel::mutate`].
     pub fn evolve_individual<F>(
-        &self,
-        individual: M::Individual,
-        parameters: &A::Parameters,
+        &mut self,
+        individual: IndividualOf<A>,
         progress: F,
-    ) -> M::Individual
+    ) -> Result<IndividualOf<A>, EvolutionError>
     where
-        F: FnMut(&Population<M::Individual>) -> bool,
+        F: FnMut(&Population<IndividualOf<A>>) -> bool,
     {
-        let mut individuals = Vec::with_capacity(parameters.max_population_size());
-        self.algorithm.borrow().model().extend_population_with(
-            &mut individuals,
-            parameters.initial_population_size(),
-            individual,
-        );
-        self.evolve_population(individuals, parameters, progress)
-            .take_fittest()
+        let mut rng = self.new_rng();
+        let streams = rng.split();
+        let model = self.algorithm.model();
+        let copies = self.algorithm.population_size().saturating_sub(1);
+        let mut individuals = Vec::with_capacity(copies + 1);
+        individuals.par_extend((0..copies).into_par_iter().map(|index| {
+            let mut copy = individual.clone();
+            model.mutate(&mut copy, &mut streams.rng(index as u64));
+            copy
+        }));
+        individuals.push(individual);
+        self.evolve(individuals, progress, &mut rng)
+            .map(Population::take_fittest)
     }
 
-    /// Runs the evolutionary algorithm on a given population.
+    /// Runs the evolutionary algorithm on a given initial population.
     ///
     /// # Arguments
-    /// * `initial_population` - The initial population to start the algorithm with.
-    /// * `parameters` - A reference to the algorithm's parameters.
-    /// * `progress` - A closure that is called for each generation. The closure receives the current state of
-    ///    the population, which includes information such as the generation number, the number of generations
-    ///    without improvement (stagnation), and statistical information regarding the fitness scores of the
-    ///    individuals in the population. The closure should return a boolean indicating whether the algorithm
-    ///    should continue ([`true`]) or terminate ([`false`]).
-    ///
-    /// # Type Parameters
-    /// * `F` - The type of progress closure.
+    /// * `initial_population` - The individuals to start the algorithm with. They are evaluated
+    ///   by the algorithm, so they do not need to be evaluated beforehand.
+    /// * `progress` - A closure that is called before each generation is bred. See
+    ///   [`run`](Evolution::run) for details.
     ///
     /// # Returns
-    /// The population of individual evolved during the run of the algorithm.
+    /// The population of the last generation.
     ///
-    /// # Panics
-    /// This method will panic if there is no valid individual in the initial population to start the
-    /// algorithm with.
-    ///
-    /// # Note
-    /// This method allows the algorithm to be run on a pre-existing population, which can be useful
-    /// in some contexts (e.g., when the initial population is obtained from some external source, or
-    /// when the algorithm is run iteratively on multiple populations).
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if the initial population has no valid
+    /// individual, or if a generation ends up with no valid individual.
     pub fn evolve_population<F>(
-        &self,
-        initial_population: Vec<M::Individual>,
-        parameters: &A::Parameters,
-        mut progress: F,
-    ) -> Population<M::Individual>
+        &mut self,
+        initial_population: Vec<IndividualOf<A>>,
+        progress: F,
+    ) -> Result<Population<IndividualOf<A>>, EvolutionError>
     where
-        F: FnMut(&Population<M::Individual>) -> bool,
+        F: FnMut(&Population<IndividualOf<A>>) -> bool,
     {
-        // Configure the algorithm
-        self.algorithm.borrow_mut().configure(parameters);
+        let mut rng = self.new_rng();
+        self.evolve(initial_population, progress, &mut rng)
+    }
 
-        // Prepare the population
-        let mut population = self
-            .algorithm
-            .borrow()
-            .initialize_population(initial_population);
+    fn new_rng(&self) -> Rng {
+        self.seed.map_or_else(Rng::from_entropy, Rng::from_seed)
+    }
 
-        // Initialize iterations
-        let mut new_population = Vec::with_capacity(parameters.max_population_size());
-        let pool = Pool::new(rayon::current_num_threads(), M::rng);
+    fn evolve<F>(
+        &mut self,
+        initial_population: Vec<IndividualOf<A>>,
+        mut progress: F,
+        rng: &mut Rng,
+    ) -> Result<Population<IndividualOf<A>>, EvolutionError>
+    where
+        F: FnMut(&Population<IndividualOf<A>>) -> bool,
+    {
+        let algorithm = &mut self.algorithm;
+        let mut population = algorithm.initialize_population(initial_population)?;
+        let mut offspring = Vec::with_capacity(algorithm.population_size());
 
-        // Start iterations
         while progress(&population) {
-            // Reset the new population.
-            new_population.clear();
-
-            // Prepare the algorithm for the new generation
-            self.algorithm
-                .borrow_mut()
-                .prepare_for_next_population(&population);
-
-            // Perform elitism on the population
-            self.algorithm
-                .borrow()
-                .select_elites(&population, &mut new_population);
-
-            // Generate the new population
-            self.algorithm.borrow().generate_new_population(
-                &population,
-                &mut new_population,
-                &pool,
-            );
-
-            // Replace the current population with the new one
-            self.algorithm
-                .borrow()
-                .replace_population(&mut population, &mut new_population);
+            offspring.clear();
+            algorithm.prepare_generation(&population);
+            algorithm.select_elites(&population, &mut offspring);
+            algorithm.generate_offspring(&population, &mut offspring, rng);
+            algorithm.replace_population(&mut population, &mut offspring)?;
         }
 
-        population
+        Ok(population)
     }
 }
 
-impl<A, M> Default for Evolution<A, M>
-where
-    A: EvolutionAlgorithm<M> + Default,
-    M: EvolutionModel + Default,
-{
-    fn default() -> Self {
-        Self {
-            algorithm: Default::default(),
-            _marker: Default::default(),
-        }
-    }
-}
-
-impl<A, M> From<A> for Evolution<A, M>
-where
-    A: EvolutionAlgorithm<M> + From<M>,
-    M: EvolutionModel,
-{
+impl<A: EvolutionAlgorithm> From<A> for Evolution<A> {
+    #[inline]
     fn from(algorithm: A) -> Self {
-        Self {
-            algorithm: RefCell::new(algorithm),
-            _marker: Default::default(),
-        }
+        Self::new(algorithm)
     }
 }

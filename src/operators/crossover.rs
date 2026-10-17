@@ -1,15 +1,12 @@
 use super::*;
-use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
-    ops::Range,
-};
+use std::{hash::Hash, ops::Range};
 
 /// Defines various crossover strategies for combining genetic information of two individuals.
 ///
 /// These strategies are mainly applicable to permutation-based problems where each gene in a
 /// genome represents a unique element of the solution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CrossoverStrategy {
     /// Generalized Partition Crossover 2 (GPX2) is a permutation-based method that identifies common
     /// sequences of genes appearing in the same order (partitions) in the parent genomes. It then
@@ -57,7 +54,7 @@ impl CrossoverStrategy {
     /// # Arguments
     /// * `parent1` - A reference to the first parent's genome.
     /// * `parent2` - A reference to the second parent's genome.
-    /// * `rng` - A mutable reference to a random number generator implementing the Rng trait
+    /// * `rng` - A mutable reference to a random number generator.
     ///
     /// # Returns
     /// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
@@ -65,24 +62,29 @@ impl CrossoverStrategy {
     ///
     /// # Panics
     /// This method will panic if the parent genomes have different lengths.
-    pub fn crossover<G: Copy + PartialOrd + Eq + Hash, R: Rng>(
+    pub fn crossover<G: Copy + PartialOrd + Eq + Hash>(
         &self,
         parent1: &[G],
         parent2: &[G],
-        rng: &mut R,
+        rng: &mut Rng,
     ) -> Vec<G> {
+        assert!(parent1.len() == parent2.len());
+        if parent1.is_empty() {
+            return Vec::new();
+        }
+
         match self {
             Self::GeneralizedPartition2 => {
                 generalized_partition_2_crossover(parent1, parent2, |_, partitions| {
-                    rng.gen_range(0..partitions.len())
+                    rng.random_range(0..partitions.len())
                 })
             }
             Self::SequentialConstructive => {
-                let pivot = parent1.choose(rng).copied().unwrap();
+                let pivot = *rng.choose(parent1).unwrap();
                 sequential_constructive_crossover(parent1, parent2, pivot)
             }
             Self::EdgeRecombination => {
-                let pivot = parent1.choose(rng).copied().unwrap();
+                let pivot = *rng.choose(parent1).unwrap();
                 edge_recombination_crossover(parent1, parent2, pivot)
             }
             Self::PartiallyMapped => {
@@ -95,7 +97,7 @@ impl CrossoverStrategy {
             }
             Self::Cycle => cycle_crossover(parent1, parent2),
             Self::SinglePoint => {
-                let point = rng.gen_range(0..parent1.len());
+                let point = rng.random_range(0..parent1.len());
                 single_point_crossover(parent1, parent2, point)
             }
         }
@@ -126,6 +128,9 @@ impl CrossoverStrategy {
 ///
 /// # Note
 /// GPX2 is applicable to permutation-based problems.
+///
+/// # Panics
+/// This method will panic if the parent genomes have different lengths.
 ///
 /// # Example
 /// ```
@@ -158,36 +163,24 @@ where
     G: Copy + PartialOrd + Eq + Hash,
     F: FnMut(Option<&G>, &[Vec<G>]) -> usize,
 {
+    assert!(parent1.len() == parent2.len());
+
     let mut offspring = Vec::with_capacity(parent1.len());
 
-    let mut genes_in_selected_partition = HashSet::with_capacity(offspring.len());
+    // The partitions are disjoint and non-empty, so each selected partition can be appended
+    // to the offspring as a whole.
     let mut partitions = common_partitions(parent1, parent2);
     while !partitions.is_empty() {
-        // Select a partition
         let partition_index = partition_selector(offspring.last(), &partitions);
         let mut partition = partitions.swap_remove(partition_index);
-
-        // Make a copy of the partition as a set for fast lookup
-        genes_in_selected_partition.clear();
-        genes_in_selected_partition.extend(partition.iter().copied());
-
-        // Add the selected partition to the offspring
         offspring.append(&mut partition);
-
-        // Remove the selected partition from all other partitions
-        for other_partition in &mut partitions {
-            other_partition.retain(|gene| !genes_in_selected_partition.contains(gene));
-        }
-
-        // Remove empty partitions
-        partitions.retain(|partition| !partition.is_empty());
     }
     offspring
 }
 
 /// Performs a Sequential Constructive Crossover (SCX) operation between two parent genomes.
 ///
-/// Sequential Constructive Crossover (SCX) selects the best next/ gene from the parent genomes
+/// Sequential Constructive Crossover (SCX) selects the best next gene from the parent genomes
 /// by prioritizing genes that appear earlier in either parent genome, while ensuring that each
 /// gene appears exactly once in the offspring.
 ///
@@ -227,7 +220,11 @@ where
         return parent1.to_vec();
     }
 
-    let mut visited = HashSet::with_capacity(n);
+    let positions1 = positions(parent1);
+    let positions2 = positions(parent2);
+    let mut visited = GeneSet::with_capacity_and_hasher(n, Default::default());
+    // Every gene of parent1 before this position is visited.
+    let mut first_unvisited = 0;
 
     let mut current = pivot;
     let mut offspring = vec![pivot; n];
@@ -235,8 +232,8 @@ where
         visited.insert(current);
 
         // Find the position of the current gene in each parent genome
-        let current_pos1 = find_position(&current, parent1).unwrap();
-        let current_pos2 = find_position(&current, parent2).unwrap();
+        let current_pos1 = positions1[&current];
+        let current_pos2 = positions2[&current];
 
         // Select the next gene in each parent genome
         let next1 = parent1[if current_pos1 + 1 != n {
@@ -255,12 +252,11 @@ where
         let is_next1_visited = visited.contains(&next1);
         let is_next2_visited = visited.contains(&next2);
         *next = if is_next1_visited && is_next2_visited {
-            // Both genes are visited; select an unvisited one
-            parent1
-                .iter()
-                .find(|gene| !visited.contains(gene))
-                .copied()
-                .unwrap()
+            // Both genes are visited; select the first unvisited one of parent1
+            while visited.contains(&parent1[first_unvisited]) {
+                first_unvisited += 1;
+            }
+            parent1[first_unvisited]
         } else if is_next1_visited {
             // Gene in parent1 is visited; select parent2's gene
             next2
@@ -269,8 +265,8 @@ where
             next1
         } else {
             // Both genes are unvisited; select the one that appeared first
-            let next1_pos2 = find_position(&next1, parent2).unwrap();
-            let next2_pos1 = find_position(&next2, parent1).unwrap();
+            let next1_pos2 = positions2[&next1];
+            let next2_pos1 = positions1[&next2];
             if next1_pos2 < next2_pos1 {
                 next1
             } else {
@@ -314,9 +310,7 @@ where
 ///
 /// let mut offspring = edge_recombination_crossover(&parent1, &parent2, 2);
 ///
-/// // Because the order of items in an HashMap's iterator are not predictable,
-/// // we test that the offspring has the same set of genes of its parents,
-/// // without duplicates.
+/// // The offspring has every gene of its parents exactly once.
 /// assert_eq!(offspring.len(), parent1.len());
 /// offspring.sort_unstable();
 /// offspring.dedup();
@@ -334,8 +328,10 @@ where
         return parent1.to_vec();
     }
 
-    // Initialize the neighbor list for each gene
-    let mut neighbor_lists = HashMap::with_capacity(n);
+    // Initialize the neighbor list for each gene. A list holds at most four genes, in the order
+    // of the parents, which also decides ties between neighbors.
+    let mut neighbor_lists: GeneMap<G, Vec<G>> =
+        GeneMap::with_capacity_and_hasher(n, Default::default());
     [parent1, parent2]
         .iter()
         .flat_map(|genome| {
@@ -346,38 +342,48 @@ where
             })
         })
         .for_each(|(gene, neighbors)| {
-            neighbor_lists
-                .entry(gene)
-                .or_insert_with(HashSet::new)
-                .extend(neighbors);
+            let list = neighbor_lists.entry(gene).or_default();
+            for neighbor in neighbors {
+                if !list.contains(&neighbor) {
+                    list.push(neighbor);
+                }
+            }
         });
 
-    let mut visited = HashSet::with_capacity(n);
+    let mut visited = GeneSet::with_capacity_and_hasher(n, Default::default());
+    // Every gene of parent1 before this position is visited.
+    let mut first_unvisited = 0;
 
     let mut current = pivot;
     let mut offspring = vec![pivot; n];
     for next in offspring.iter_mut().skip(1) {
         visited.insert(current);
 
-        // Remove the current gene from the neighbor list of all genes
-        for neighbors in neighbor_lists.values_mut() {
-            neighbors.remove(&current);
+        // Remove the current gene from the neighbor list of all genes. Neighborhood is
+        // symmetric, so only the neighbors of the current gene have it in their lists.
+        let current_neighbors = neighbor_lists
+            .get_mut(&current)
+            .map(std::mem::take)
+            .unwrap_or_default();
+        for neighbor in &current_neighbors {
+            if let Some(neighbors) = neighbor_lists.get_mut(neighbor) {
+                neighbors.retain(|gene| *gene != current);
+            }
         }
 
         // Select the next gene with the shortest neighbor list
-        *next = neighbor_lists[&current]
+        *next = current_neighbors
             .iter()
             .filter(|gene| !visited.contains(gene))
             .min_by_key(|&gene| neighbor_lists[gene].len())
             .copied()
             .unwrap_or_else(|| {
                 // No gene is found in the current neighbor list
-                // Select an unvisited gene
-                parent1
-                    .iter()
-                    .find(|gene| !visited.contains(gene))
-                    .copied()
-                    .unwrap()
+                // Select the first unvisited gene of parent1
+                while visited.contains(&parent1[first_unvisited]) {
+                    first_unvisited += 1;
+                }
+                parent1[first_unvisited]
             });
 
         current = *next;
@@ -417,7 +423,7 @@ where
 /// ```
 pub fn partially_mapped_crossover<G>(parent1: &[G], parent2: &[G], range: Range<usize>) -> Vec<G>
 where
-    G: Copy + PartialEq,
+    G: Copy + Eq + Hash,
 {
     assert!(parent1.len() == parent2.len());
 
@@ -434,12 +440,12 @@ where
     offspring[p1..p2].copy_from_slice(&parent1[p1..p2]);
 
     // Map the remaining genes to the offspring while preserving relative orderings
-    let start = &parent1[p1..p2];
+    let start = GenePositions::new(&parent1[p1..p2]);
     let end = &parent2[p1..p2];
     for (i, gene) in offspring.iter_mut().enumerate() {
         if !range.contains(&i) {
             let mut mapped_gene = parent2[i];
-            while let Some(pos) = find_position(&mapped_gene, start) {
+            while let Some(pos) = start.get(&mapped_gene) {
                 mapped_gene = end[pos];
             }
             *gene = mapped_gene
@@ -457,7 +463,8 @@ where
 /// # Arguments
 /// * `parent1` - A reference to the first parent's genome.
 /// * `parent2` - A reference to the second parent's genome.
-/// * `range` - The range of genes to be mapped from `parent1` to the offspring.
+/// * `range` - The range of genes to be copied from `parent1` to the offspring. If the range is
+///   empty, the offspring is a copy of `parent2`.
 ///
 /// # Returns
 /// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
@@ -467,7 +474,8 @@ where
 /// OX is applicable to permutation-based problems.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// This method will panic if the parent genomes have different lengths, or if `range` is not
+/// within the bounds of the genomes.
 ///
 /// # Example
 /// ```
@@ -481,11 +489,15 @@ where
 /// ```
 pub fn order_crossover<G>(parent1: &[G], parent2: &[G], range: Range<usize>) -> Vec<G>
 where
-    G: Copy + PartialEq,
+    G: Copy + Eq + Hash,
 {
     assert!(parent1.len() == parent2.len());
+    assert!(range.start <= range.end && range.end <= parent1.len());
 
     let n = parent1.len();
+    if range.is_empty() {
+        return parent2.to_vec();
+    }
     if n < 2 {
         return parent1.to_vec();
     }
@@ -499,10 +511,11 @@ where
 
     // Fill the remaining gaps in the offspring with genes from parent2 while preserving
     // the relative order of genes from parent1
+    let copied_genes = GenePositions::new(&parent1[p1..p2]);
     let mut index1 = if p2 != n { p2 } else { 0 };
     let mut index2 = index1;
     while index1 != p1 {
-        if !genome[p1..p2].contains(&parent2[index2]) {
+        if !copied_genes.contains(&parent2[index2]) {
             genome[index1] = parent2[index2];
             index1 += 1;
             if index1 == n {
@@ -549,7 +562,7 @@ where
 /// ```
 pub fn cycle_crossover<G>(parent1: &[G], parent2: &[G]) -> Vec<G>
 where
-    G: Copy + PartialEq,
+    G: Copy + Eq + Hash,
 {
     assert!(parent1.len() == parent2.len());
 
@@ -558,6 +571,7 @@ where
         return parent1.to_vec();
     }
 
+    let positions2 = GenePositions::new(parent2);
     let mut offspring = vec![parent1[0]; n];
     let mut visited = vec![false; n];
 
@@ -567,7 +581,7 @@ where
     while cycle_start < n {
         let mut index = cycle_start;
 
-        // Find the next cycle
+        // Find the next cycle by following each gene of parent1 to its position in parent2
         while !visited[index] {
             visited[index] = true;
 
@@ -577,20 +591,17 @@ where
                 parent2[index]
             };
 
-            // Find the index of the current element in the other parent
-            index = if first_parent {
-                find_position(&parent1[index], parent2).unwrap()
-            } else {
-                find_position(&parent2[index], parent1).unwrap()
-            };
+            index = positions2
+                .get(&parent1[index])
+                .expect("the parents should be permutations of the same genes");
         }
 
         // Switch the parent for the next cycle
         first_parent = !first_parent;
 
-        // Find the next unvisited element
-        if let Some(next_start) = visited.iter().position(|&x| !x) {
-            cycle_start = next_start;
+        // Find the next unvisited element; every element before the cycle start is visited
+        if let Some(offset) = visited[cycle_start..].iter().position(|&x| !x) {
+            cycle_start += offset;
         } else {
             break;
         }
@@ -642,7 +653,112 @@ where
     offspring
 }
 
-#[inline]
-fn find_position<G: PartialEq>(target_gene: &G, genome: &[G]) -> Option<usize> {
-    genome.iter().position(|gene| gene == target_gene)
+/// Maps each gene of `genome` to the position of its first occurrence.
+fn positions<G: Copy + Eq + Hash>(genome: &[G]) -> GeneMap<G, usize> {
+    let mut positions = GeneMap::with_capacity_and_hasher(genome.len(), Default::default());
+    for (position, &gene) in genome.iter().enumerate() {
+        positions.entry(gene).or_insert(position);
+    }
+    positions
+}
+
+/// Finds the positions of genes in a genome.
+///
+/// A short genome is scanned linearly, which is faster than hashing its genes; a longer one is
+/// indexed by a hash map, which keeps each lookup constant-time.
+enum GenePositions<'a, G> {
+    Scan(&'a [G]),
+    Map(GeneMap<G, usize>),
+}
+
+impl<'a, G: Copy + Eq + Hash> GenePositions<'a, G> {
+    /// The longest genome that is scanned linearly. Measured on 64-bit integer genes, a linear
+    /// scan was faster than hashing up to about 25 to 50 genes.
+    const SCAN_LIMIT: usize = 32;
+
+    fn new(genome: &'a [G]) -> Self {
+        if genome.len() <= Self::SCAN_LIMIT {
+            Self::Scan(genome)
+        } else {
+            Self::Map(positions(genome))
+        }
+    }
+
+    /// Returns the position of the first occurrence of `gene`, if any.
+    #[inline]
+    fn get(&self, gene: &G) -> Option<usize> {
+        match self {
+            Self::Scan(genome) => genome.iter().position(|g| g == gene),
+            Self::Map(positions) => positions.get(gene).copied(),
+        }
+    }
+
+    /// Returns whether the genome contains `gene`.
+    #[inline]
+    fn contains(&self, gene: &G) -> bool {
+        match self {
+            Self::Scan(genome) => genome.contains(gene),
+            Self::Map(positions) => positions.contains_key(gene),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PARENT1: [u32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const PARENT2: [u32; 10] = [8, 9, 0, 7, 4, 5, 6, 3, 2, 1];
+
+    #[test]
+    fn order_crossover_with_empty_range_copies_second_parent() {
+        for start in 0..=PARENT1.len() {
+            assert_eq!(
+                order_crossover(&PARENT1, &PARENT2, start..start),
+                PARENT2.to_vec(),
+                "range {start}..{start}"
+            );
+        }
+    }
+
+    #[test]
+    fn permutation_crossovers_produce_permutations_of_the_parents() {
+        let strategies = [
+            CrossoverStrategy::GeneralizedPartition2,
+            CrossoverStrategy::SequentialConstructive,
+            CrossoverStrategy::EdgeRecombination,
+            CrossoverStrategy::PartiallyMapped,
+            CrossoverStrategy::Order,
+            CrossoverStrategy::Cycle,
+        ];
+        let mut rng = Rng::from_seed(0);
+
+        for strategy in strategies {
+            for _ in 0..100 {
+                let mut offspring = strategy.crossover(&PARENT1, &PARENT2, &mut rng);
+                offspring.sort_unstable();
+                assert_eq!(offspring, PARENT1.to_vec(), "{strategy:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn crossover_of_empty_genomes_is_empty() {
+        let empty: [u32; 0] = [];
+        for strategy in [
+            CrossoverStrategy::GeneralizedPartition2,
+            CrossoverStrategy::SequentialConstructive,
+            CrossoverStrategy::EdgeRecombination,
+            CrossoverStrategy::PartiallyMapped,
+            CrossoverStrategy::Order,
+            CrossoverStrategy::Cycle,
+            CrossoverStrategy::SinglePoint,
+        ] {
+            assert!(
+                strategy
+                    .crossover(&empty, &empty, &mut Rng::from_seed(1))
+                    .is_empty()
+            );
+        }
+    }
 }

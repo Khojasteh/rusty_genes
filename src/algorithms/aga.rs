@@ -1,64 +1,60 @@
 use super::*;
-use std::ops::Range;
+use std::ops::RangeInclusive;
 
-/// Represents the parameters used in an adaptive genetic algorithm.
+/// Represents the parameters of an [`AdaptiveGeneticAlgorithm`].
 ///
 /// # Note
-/// The `AdaptiveGeneticAlgorithmParameters` struct contains the various parameters and options that
-/// control the behavior of a genetic algorithm. These settings include the maximum number of generations
-/// to run the algorithm, the crossover rate and mutation rate used in the genetic operators, the size
-/// of the population used in the algorithm, the elitism ratio used in the elitism process, and the
-/// interval at which the parameters are adjusted.
+/// The parameters are validated when an [`AdaptiveGeneticAlgorithm`] is created with them. How
+/// long the algorithm runs is decided by the `progress` closure given to the methods of
+/// [`Evolution`].
+///
+/// New parameters may be added in the future, so the parameters are created by
+/// [`Default::default`] and then changed as needed.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct AdaptiveGeneticAlgorithmParameters {
-    /// The number of individuals in the population.
+    /// The number of individuals in a full generation.
     ///
     /// # Note
-    /// `population_size` is a positive integer that determines the size of the population
-    /// used in the genetic algorithm. A larger population size can help improve the diversity
-    /// of the population and reduce the risk of premature convergence, but it can also increase
-    /// the computational cost of the algorithm.
+    /// `population_size` must be positive. A larger population can improve the diversity of the
+    /// population and reduce the risk of premature convergence, but it also increases the
+    /// computational cost of the algorithm.
     pub population_size: usize,
 
-    /// The proportion of the fittest individuals in the current population that are directly carried
-    /// over to the next generation.
+    /// The proportion of the fittest individuals in the current generation that are directly
+    /// carried over to the next generation.
     ///
     /// # Note
-    /// `elitism_rate` is a floating-point value between 0.0 and 1.0, excluding. A value of 0 means no
-    /// elitism (i.e., all individuals in the next generation are produced by crossover and mutation), while
-    /// a value close to 1 means high elitism (i.e., most of the individuals in the next generation are the
-    /// fittest ones from the current generation).
-    ///
-    /// Elitism ensures that the fittest individuals are preserved from generation to generation, aiding
-    /// in overall performance improvement of the population over time. However, setting this value too
-    /// high may limit the diversity of the population and could lead to premature convergence.
+    /// `elitism_rate` must be between 0.0 (inclusive) and 1.0 (exclusive). A value of 0.0 means
+    /// no elitism, i.e. all individuals of the next generation are bred, while a value close to
+    /// 1.0 means that most individuals of the next generation are the fittest ones of the
+    /// current generation. The number of elites is rounded down.
     pub elitism_rate: f64,
 
-    /// The range of probabilities of two individuals combining their genetic information to produce offspring.
-    /// This range is dynamically adjusted based on the diversity of the population.
+    /// The range of the probability of two individuals combining their genetic information to
+    /// produce an offspring.
     ///
     /// # Note
-    /// `crossover_rate` is a range of floating-point values between 0.0 and 1.0, inclusive. A higher value
-    /// increases the likelihood of crossover events occurring.
-    pub crossover_rate_range: Range<f64>,
+    /// Both bounds must be between 0.0 and 1.0, inclusive, and the start must not exceed the end.
+    /// The crossover rate moves towards the end of the range as the diversity of the population
+    /// increases.
+    pub crossover_rate_range: RangeInclusive<f64>,
 
-    /// The range of probabilities of an individual undergoing the mutation process.
-    /// This range is dynamically adjusted based on the diversity of the population.
+    /// The range of the probability of an offspring undergoing mutation.
     ///
     /// # Note
-    /// `mutation_rate` is a range of floating-point values between 0.0 and 1.0, inclusive. A higher value
-    /// increases the likelihood of mutations occurring, which can introduce more genetic diversity
-    /// in the population.
-    pub mutation_rate_range: Range<f64>,
+    /// Both bounds must be between 0.0 and 1.0, inclusive, and the start must not exceed the end.
+    /// The mutation rate moves towards the end of the range as the diversity of the population
+    /// decreases.
+    pub mutation_rate_range: RangeInclusive<f64>,
 
-    /// The selection strategy used to select individuals from the population.
-    ///
-    /// # Note
-    /// The selection strategy is an important aspect of an evolutionary algorithm. It determines how
-    /// individuals are chosen from the population for reproduction and thereby, influences the diversity
-    /// and convergence speed of the algorithm.
+    /// The strategy for selecting parents from the population.
     pub selection_strategy: SelectionStrategy,
 
-    /// The interval at which the parameters are adjusted based on the population's diversity.
+    /// The number of generations between adjustments of the crossover and mutation rates.
+    ///
+    /// # Note
+    /// `parameter_adjustment_interval` must be positive.
     pub parameter_adjustment_interval: usize,
 }
 
@@ -68,63 +64,85 @@ impl Default for AdaptiveGeneticAlgorithmParameters {
     /// # Default Values
     /// * population_size: 100
     /// * elitism_rate: 0.01
-    /// * crossover_rate_range: 0.3..1.0
-    /// * mutation_rate_range: 0.1..1.0,
+    /// * crossover_rate_range: 0.3..=1.0
+    /// * mutation_rate_range: 0.1..=1.0
     /// * selection_strategy: [`SelectionStrategy::RouletteWheel`]
     /// * parameter_adjustment_interval: 1
     fn default() -> Self {
         Self {
             population_size: 100,
             elitism_rate: 0.01,
-            crossover_rate_range: 0.3..1.0,
-            mutation_rate_range: 0.1..1.0,
+            crossover_rate_range: 0.3..=1.0,
+            mutation_rate_range: 0.1..=1.0,
             selection_strategy: SelectionStrategy::RouletteWheel,
             parameter_adjustment_interval: 1,
         }
     }
 }
 
-impl EvolutionParameters for AdaptiveGeneticAlgorithmParameters {
-    fn initial_population_size(&self) -> usize {
-        self.population_size
+impl AdaptiveGeneticAlgorithmParameters {
+    /// Validates the parameters.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] for the first parameter that is outside
+    /// of its valid domain.
+    pub fn validate(&self) -> Result<(), EvolutionError> {
+        if self.population_size == 0 {
+            return Err(EvolutionError::invalid_parameter(
+                "population_size",
+                "must be positive",
+            ));
+        }
+        check_ratio("elitism_rate", self.elitism_rate)?;
+        check_probability_range("crossover_rate_range", &self.crossover_rate_range)?;
+        check_probability_range("mutation_rate_range", &self.mutation_rate_range)?;
+        if self.parameter_adjustment_interval == 0 {
+            return Err(EvolutionError::invalid_parameter(
+                "parameter_adjustment_interval",
+                "must be positive",
+            ));
+        }
+        self.selection_strategy.validate()
     }
+}
 
-    fn max_population_size(&self) -> usize {
-        self.population_size
+fn check_probability_range(
+    name: &'static str,
+    range: &RangeInclusive<f64>,
+) -> Result<(), EvolutionError> {
+    check_probability(name, *range.start())?;
+    check_probability(name, *range.end())?;
+    if range.start() > range.end() {
+        return Err(EvolutionError::invalid_parameter(
+            name,
+            "the start must not exceed the end",
+        ));
     }
-
-    fn validate(&self) {
-        assert!(self.population_size != 0);
-        assert!((0.0..1.0).contains(&self.elitism_rate));
-        assert!((0.0..=1.0).contains(&self.crossover_rate_range.start));
-        assert!((0.0..=1.0).contains(&self.crossover_rate_range.end));
-        assert!((0.0..=1.0).contains(&self.mutation_rate_range.start));
-        assert!((0.0..=1.0).contains(&self.mutation_rate_range.end));
-    }
+    Ok(())
 }
 
 /// An adaptive genetic algorithm for evolving populations towards better fitness values.
 ///
 /// # Note
-/// This struct represents a genetic algorithm that adaptively adjusts its parameters based on the diversity
-/// of the population, with the goal of maintaining a balance between exploration and exploitation.
+/// This algorithm adjusts its crossover and mutation rates to the diversity of the population,
+/// with the goal of balancing exploration and exploitation.
 ///
-/// The crossover and mutation rates are dynamically adjusted based on the calculated diversity value. If
-/// diversity is high, the algorithm increases crossover rate and decreases mutation rate. This promotes
-/// the exploitation of existing diversity through crossover operations. Conversely, when diversity is low,
-/// the algorithm increases mutation rate and decreases crossover rate to encourage exploration by introducing
-/// and maintaining more diversity in the population.
+/// The diversity is the standard deviation of the fitness scores of the current generation
+/// relative to that of the initial generation, limited to the range 0.0 to 1.0. When the
+/// initial generation has no spread at all, the first spread observed later becomes the
+/// reference. When diversity is high, the algorithm increases the crossover rate and decreases
+/// the mutation rate, which exploits the existing diversity through crossover. When diversity is
+/// low, it decreases the crossover rate and increases the mutation rate, which encourages
+/// exploration by introducing more diversity into the population.
 ///
-/// These adaptive adjustments happen on a configured interval, making the algorithm dynamically responsive
-/// to the state and diversity of the current population.
+/// The rates start at the highest crossover rate and the lowest mutation rate, and are adjusted
+/// at the configured interval. The algorithm breeds its offspring by a [`Reproduction`], whose
+/// parent selector and survival policy can be replaced through
+/// [`reproduction_mut`](AdaptiveGeneticAlgorithm::reproduction_mut); the rates the algorithm
+/// sets replace any rates set there.
 ///
-/// The algorithm operates on an [`EvolutionModel`] which defines the problem-specific components such
-/// as crossover and mutation operators, as well as the fitness function for evaluating individuals in
-/// the population.
-///
-/// By adapting its parameters throughout the iterations, the `AdaptiveGeneticAlgorithm` is better
-/// suited to tackle complex optimization problems with varying search landscapes and diverse solution
-/// spaces.
+/// The algorithm operates on an [`EvolutionModel`], which defines the problem-specific
+/// components such as the crossover and mutation operators, and the fitness function.
 ///
 /// # Example
 /// ```
@@ -133,32 +151,100 @@ impl EvolutionParameters for AdaptiveGeneticAlgorithmParameters {
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
-/// let one_max = OneMaxEvolutionModel;
-/// let adaptive_ga = AdaptiveGeneticAlgorithm::build_evolution(one_max);
-/// let adaptive_ga_params = AdaptiveGeneticAlgorithmParameters {
-///     selection_strategy: SelectionStrategy::Tournament(4),
-///     ..Default::default()
-/// };
+/// let mut aga_params = AdaptiveGeneticAlgorithmParameters::default();
+/// aga_params.selection_strategy = SelectionStrategy::Tournament(4);
+/// let mut aga = AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, aga_params)?.into_evolution();
 ///
-/// let solution = adaptive_ga.run(&ONE_MAX_LENGTH, &adaptive_ga_params, |population| {
-///     population.fittest().fitness() < 0.999999 && population.generation() <= 100
-/// });
+/// let solution = aga.run(&ONE_MAX_LENGTH, |population| {
+///     population.fittest().fitness() < 1.0 && population.generation() <= 200
+/// })?;
 ///
 /// assert!(solution.genome().iter().all(|&one| one));
+/// # Ok::<(), EvolutionError>(())
 /// ```
 pub struct AdaptiveGeneticAlgorithm<M: EvolutionModel> {
     model: M,
-    population_size: usize,
-    elite_size: usize,
-    adjustment_interval: usize,
-    crossover_rate_range: Range<f64>,
-    mutation_rate_range: Range<f64>,
-    breeding: ReproductionParameters<M>,
+    parameters: AdaptiveGeneticAlgorithmParameters,
+    elite_count: usize,
+    reproduction: Reproduction<M::Individual>,
     reference_std: f64,
 }
 
-impl<M: EvolutionModel> EvolutionAlgorithm<M> for AdaptiveGeneticAlgorithm<M> {
-    type Parameters = AdaptiveGeneticAlgorithmParameters;
+impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
+    /// Creates an adaptive genetic algorithm that operates on `model` with the given parameters.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] if a parameter is invalid.
+    pub fn new(
+        model: M,
+        parameters: AdaptiveGeneticAlgorithmParameters,
+    ) -> Result<Self, EvolutionError> {
+        parameters.validate()?;
+        let reproduction = Reproduction::from_strategy(
+            parameters.selection_strategy,
+            *parameters.crossover_rate_range.end(),
+            *parameters.mutation_rate_range.start(),
+        )?;
+        Ok(Self {
+            model,
+            elite_count: elite_count(parameters.population_size, parameters.elitism_rate),
+            parameters,
+            reproduction,
+            reference_std: 0.0,
+        })
+    }
+
+    /// Returns the parameters the algorithm was created with.
+    #[inline]
+    pub fn parameters(&self) -> &AdaptiveGeneticAlgorithmParameters {
+        &self.parameters
+    }
+
+    /// Returns the reproduction that breeds the offspring, with the rates of the current
+    /// generation.
+    #[inline]
+    pub fn reproduction(&self) -> &Reproduction<M::Individual> {
+        &self.reproduction
+    }
+
+    /// Returns the reproduction that breeds the offspring, to replace its parent selector or
+    /// survival policy.
+    #[inline]
+    pub fn reproduction_mut(&mut self) -> &mut Reproduction<M::Individual> {
+        &mut self.reproduction
+    }
+
+    /// Sets the crossover rate to the point of its range given by `crossover_ratio`, and the
+    /// mutation rate to the point of its range given by `mutation_ratio`.
+    fn set_rates(&mut self, crossover_ratio: f64, mutation_ratio: f64) {
+        let rate_in = |range: &RangeInclusive<f64>, ratio| {
+            interpolate_f64(*range.start(), *range.end(), ratio).clamp(*range.start(), *range.end())
+        };
+        let crossover_rate = rate_in(&self.parameters.crossover_rate_range, crossover_ratio);
+        let mutation_rate = rate_in(&self.parameters.mutation_rate_range, mutation_ratio);
+        self.reproduction
+            .set_rates(crossover_rate, mutation_rate)
+            .expect("the rate ranges are validated on creation");
+    }
+
+    /// Returns the diversity of the population, between 0.0 and 1.0, relative to the reference
+    /// standard deviation, which it adopts first if there is none yet.
+    fn diversity(&mut self, population: &Population<M::Individual>) -> f64 {
+        let std = population.stats().std();
+        if self.reference_std <= 0.0 {
+            self.reference_std = std;
+        }
+        let ratio = std / self.reference_std;
+        if ratio.is_nan() {
+            0.0
+        } else {
+            ratio.clamp(0.0, 1.0)
+        }
+    }
+}
+
+impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
+    type Model = M;
 
     #[inline]
     fn model(&self) -> &M {
@@ -166,20 +252,23 @@ impl<M: EvolutionModel> EvolutionAlgorithm<M> for AdaptiveGeneticAlgorithm<M> {
     }
 
     #[inline]
-    fn reproduction_parameters(&self) -> (&ReproductionParameters<M>, usize) {
-        (&self.breeding, self.population_size)
+    fn population_size(&self) -> usize {
+        self.parameters.population_size
     }
 
-    #[inline]
-    fn configure(&mut self, parameters: &AdaptiveGeneticAlgorithmParameters) {
-        parameters.validate();
+    fn prepare_generation(&mut self, population: &Population<M::Individual>) {
+        let generation = population.generation();
+        if generation == 0 {
+            self.reference_std = population.stats().std();
+            self.reproduction.reset();
+            self.set_rates(1.0, 0.0);
+        } else if generation % self.parameters.parameter_adjustment_interval == 0 {
+            let diversity = self.diversity(population);
+            self.set_rates(diversity, 1.0 - diversity);
+        }
 
-        self.population_size = parameters.population_size;
-        self.elite_size = interpolate_usize(0, parameters.population_size, parameters.elitism_rate);
-        self.adjustment_interval = parameters.parameter_adjustment_interval;
-        self.crossover_rate_range = parameters.crossover_rate_range.clone();
-        self.mutation_rate_range = parameters.mutation_rate_range.clone();
-        self.breeding.parent_selector = parameters.selection_strategy.create_selector();
+        self.model.prepare(population);
+        self.reproduction.prepare(population);
     }
 
     #[inline]
@@ -188,59 +277,18 @@ impl<M: EvolutionModel> EvolutionAlgorithm<M> for AdaptiveGeneticAlgorithm<M> {
         population: &Population<M::Individual>,
         elites: &mut Vec<M::Individual>,
     ) {
-        if self.elite_size != 0 {
-            let range_start = population.len().saturating_sub(self.elite_size);
-            elites.extend(population[range_start..].iter().cloned());
-        }
+        select_fittest(population, self.elite_count, elites);
     }
 
     #[inline]
-    fn prepare_for_next_population(&mut self, population: &Population<M::Individual>) {
-        match population.generation() {
-            0 => {
-                self.reference_std = population.stats().std();
-                self.breeding.crossover_rate = self.crossover_rate_range.end;
-                self.breeding.mutation_rate = self.mutation_rate_range.start;
-            }
-            n if self.adjustment_interval != 0 && n % self.adjustment_interval == 0 => {
-                let diversity = (population.stats().std() / self.reference_std).clamp(0.0, 1.0);
-
-                self.breeding.crossover_rate = interpolate_f64(
-                    self.crossover_rate_range.start,
-                    self.crossover_rate_range.end,
-                    diversity,
-                );
-                self.breeding.mutation_rate = interpolate_f64(
-                    self.mutation_rate_range.start,
-                    self.mutation_rate_range.end,
-                    1.0 - diversity,
-                );
-            }
-            _ => {}
-        }
-
-        self.model.pre_generation(population, &mut self.breeding);
-        self.breeding.parent_selector.prepare(population);
-    }
-}
-
-impl<M: EvolutionModel> From<M> for AdaptiveGeneticAlgorithm<M> {
-    fn from(model: M) -> Self {
-        Self {
-            model,
-            population_size: Default::default(),
-            elite_size: Default::default(),
-            breeding: Default::default(),
-            reference_std: Default::default(),
-            adjustment_interval: Default::default(),
-            crossover_rate_range: Default::default(),
-            mutation_rate_range: Default::default(),
-        }
-    }
-}
-
-impl<M: EvolutionModel + Default> Default for AdaptiveGeneticAlgorithm<M> {
-    fn default() -> Self {
-        Self::from(M::default())
+    fn generate_offspring(
+        &self,
+        population: &Population<M::Individual>,
+        offspring: &mut Vec<M::Individual>,
+        rng: &mut Rng,
+    ) {
+        let size = self.population_size();
+        self.reproduction
+            .breed_into(&self.model, population, offspring, size, rng);
     }
 }
