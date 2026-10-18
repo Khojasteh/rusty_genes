@@ -38,6 +38,16 @@ pub trait EvolutionAlgorithm {
         Evolution::new(self)
     }
 
+    /// Starts a new run, before its starting individuals are created.
+    ///
+    /// An algorithm that adapts its state during a run resets it here, so that every run
+    /// starts as if the algorithm were new. [`Evolution`] calls this method before it reads
+    /// the [`population_size`](EvolutionAlgorithm::population_size) or uses the model to create
+    /// the starting individuals.
+    ///
+    /// The algorithm is also responsible for calling [`EvolutionModel::start_run`] on its model.
+    fn start_run(&mut self);
+
     /// Prepares the initial population for the evolutionary process.
     ///
     /// # Arguments
@@ -60,15 +70,13 @@ pub trait EvolutionAlgorithm {
         Population::new(individuals)
     }
 
-    /// Prepares the algorithm for breeding the next generation from `population`.
+    /// Prepares the algorithm for breeding the next generation from the population of `state`.
     ///
     /// # Note
-    /// This method is called once per generation, before any other step of the generation. When
-    /// the generation number of `population` is zero, a new run starts, and the algorithm should
-    /// reset any state it adapts during a run.
+    /// This method is called once per generation, before any other step of the generation.
     ///
     /// The algorithm is also responsible for calling [`EvolutionModel::prepare`] on its model.
-    fn prepare_generation(&mut self, population: &Population<IndividualOf<Self>>);
+    fn prepare_generation(&mut self, state: &RunState<IndividualOf<Self>>);
 
     /// Carries the elite individuals of `population` over to the next generation by adding them
     /// to `elites`.
@@ -83,11 +91,11 @@ pub trait EvolutionAlgorithm {
         elites.push(population.fittest().clone());
     }
 
-    /// Breeds new individuals from `population` and adds them to `offspring` until it holds
-    /// [`population_size`](EvolutionAlgorithm::population_size) individuals.
+    /// Breeds new individuals from the population of `state` and adds them to `offspring` until
+    /// it holds [`population_size`](EvolutionAlgorithm::population_size) individuals.
     ///
     /// # Arguments
-    /// * `population` - The current population.
+    /// * `state` - The state of the run, which holds the current population.
     /// * `offspring` - The individuals of the next generation, which may already hold its elites.
     /// * `rng` - A mutable reference to the random number generator of the run.
     ///
@@ -97,7 +105,7 @@ pub trait EvolutionAlgorithm {
     /// as [`Reproduction::breed_into`] does.
     fn generate_offspring(
         &self,
-        population: &Population<IndividualOf<Self>>,
+        state: &RunState<IndividualOf<Self>>,
         offspring: &mut Vec<IndividualOf<Self>>,
         rng: &mut Rng,
     );
@@ -106,6 +114,8 @@ pub trait EvolutionAlgorithm {
     ///
     /// # Note
     /// The default implementation replaces the whole population by [`Population::replace`].
+    /// [`Evolution`] records the new generation in the [`RunState`] of the run once the
+    /// population is replaced.
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if the new generation has no valid individual.
@@ -136,9 +146,12 @@ fn select_fittest<I: Individual>(population: &Population<I>, count: usize, elite
 mod tests {
     use super::*;
     use crate::one_max::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        ops::ControlFlow,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     fn ga_parameters(population_size: usize, elitism_rate: f64) -> GeneticAlgorithmParameters {
@@ -162,12 +175,14 @@ mod tests {
             .unwrap()
             .into_evolution();
 
-        let population = evolution
-            .evolve_population(vec![OneMax::from(vec![false; 8])], |p| p.generation() < 50)
+        let outcome = evolution
+            .evolve_population(vec![OneMax::from(vec![false; 8])], |s| {
+                Limits::new().generations(50).check(s)
+            })
             .unwrap();
 
-        assert_eq!(population.generation(), 50);
-        assert_eq!(population.len(), 1);
+        assert_eq!(outcome.state().generation(), 50);
+        assert_eq!(outcome.state().population().len(), 1);
     }
 
     #[test]
@@ -176,14 +191,14 @@ mod tests {
         let initial = (0..4)
             .map(|i| OneMax::from((0..8).map(|bit| bit < i).collect::<Vec<_>>()))
             .collect();
-        let population = ga.initialize_population(initial).unwrap();
-        ga.prepare_generation(&population);
+        let state = RunState::new(ga.initialize_population(initial).unwrap());
+        ga.prepare_generation(&state);
 
         let mut offspring = Vec::new();
-        ga.select_elites(&population, &mut offspring);
+        ga.select_elites(state.population(), &mut offspring);
         assert_eq!(offspring.len(), 3);
 
-        ga.generate_offspring(&population, &mut offspring, &mut Rng::from_seed(0));
+        ga.generate_offspring(&state, &mut offspring, &mut Rng::from_seed(0));
         assert_eq!(offspring.len(), 4);
     }
 
@@ -220,6 +235,172 @@ mod tests {
         }
     }
 
+    /// An individual whose fitness is its value.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Score(f64);
+
+    impl Individual for Score {
+        fn fitness(&self) -> f64 {
+            self.0
+        }
+    }
+
+    impl RandomIndividual<f64> for Score {
+        fn new_random(value: &f64, _: &mut Rng) -> Self {
+            Score(*value)
+        }
+    }
+
+    /// A model whose offspring are always less fit than their parents.
+    struct Decline;
+
+    impl EvolutionModel for Decline {
+        type Individual = Score;
+
+        fn crossover(&self, parent1: &Score, parent2: &Score, _: &mut Rng) -> Score {
+            Score(parent1.0.min(parent2.0) - 1.0)
+        }
+
+        fn mutate(&self, individual: &mut Score, _: &mut Rng) {
+            individual.0 -= 10.0;
+        }
+
+        fn evaluate(&self, _: &mut Score) {}
+    }
+
+    /// An evolution without elites, whose offspring always replace their parents, so each
+    /// generation is less fit than the one before.
+    fn declining_evolution() -> Evolution<GeneticAlgorithm<Decline>> {
+        let parameters = GeneticAlgorithmParameters {
+            population_size: 4,
+            elitism_rate: 0.0,
+            crossover_rate: 1.0,
+            mutation_rate: 1.0,
+            selection_strategy: SelectionStrategy::Rank,
+        };
+        let mut ga = GeneticAlgorithm::new(Decline, parameters).unwrap();
+        ga.reproduction_mut().set_survival(Generational);
+        ga.into_evolution().with_seed(0)
+    }
+
+    #[test]
+    fn run_returns_the_fittest_individual_of_any_generation() {
+        let mut evolution = declining_evolution();
+
+        let mut last_fitness = f64::NAN;
+        let outcome = evolution
+            .run(&100.0, |s| {
+                last_fitness = s.population().fittest().fitness();
+                Limits::new().generations(5).check(s)
+            })
+            .unwrap();
+
+        assert!(last_fitness < 100.0);
+        assert_eq!(outcome.reason(), &StopReason::GenerationLimit);
+        assert_eq!(outcome.into_fittest_so_far(), Score(100.0));
+    }
+
+    #[test]
+    fn evolve_individual_returns_the_fittest_individual_of_any_generation() {
+        let mut evolution = declining_evolution();
+
+        let mut last_fitness = f64::NAN;
+        let best = evolution
+            .evolve_individual(Score(100.0), |s| {
+                last_fitness = s.population().fittest().fitness();
+                Limits::new().generations(5).check(s)
+            })
+            .unwrap()
+            .into_fittest_so_far();
+
+        assert!(last_fitness < 100.0);
+        assert_eq!(best, Score(100.0));
+    }
+
+    #[test]
+    fn a_run_stops_with_the_reason_its_callback_gives() {
+        for reason in [StopReason::Interrupted, StopReason::Custom("enough".into())] {
+            let outcome = declining_evolution()
+                .run(&100.0, |s| {
+                    if s.generation() < 2 {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(reason.clone())
+                    }
+                })
+                .unwrap();
+            assert_eq!(outcome.reason(), &reason);
+            assert_eq!(outcome.state().generation(), 2);
+        }
+    }
+
+    /// A model of OneMax that mutates more bits in each generation of a run, and records how
+    /// many bits it mutates at a time.
+    struct Strengthening {
+        strength: usize,
+        strengths: Mutex<Vec<usize>>,
+    }
+
+    impl EvolutionModel for Strengthening {
+        type Individual = OneMax;
+
+        fn start_run(&mut self) {
+            self.strength = 1;
+        }
+
+        fn prepare(&mut self, _: &RunState<OneMax>) {
+            self.strength += 1;
+        }
+
+        fn crossover(&self, parent1: &OneMax, parent2: &OneMax, rng: &mut Rng) -> OneMax {
+            OneMaxEvolutionModel.crossover(parent1, parent2, rng)
+        }
+
+        fn mutate(&self, individual: &mut OneMax, rng: &mut Rng) {
+            self.strengths.lock().unwrap().push(self.strength);
+            for _ in 0..self.strength {
+                OneMaxEvolutionModel.mutate(individual, rng);
+            }
+        }
+
+        fn evaluate(&self, individual: &mut OneMax) {
+            OneMaxEvolutionModel.evaluate(individual);
+        }
+    }
+
+    /// Asserts that two seeded runs of `algorithm` from the same individual mutate its starting
+    /// copies at the strength of a new run, and end with the same population.
+    fn assert_runs_start_afresh<A: EvolutionAlgorithm<Model = Strengthening>>(algorithm: A) {
+        let mut evolution = algorithm.into_evolution().with_seed(7);
+        let copies = evolution.algorithm().population_size() - 1;
+        let mut populations = Vec::new();
+        for _ in 0..2 {
+            let outcome = evolution
+                .evolve_individual(OneMax::from(vec![false; 8]), |s| {
+                    Limits::new().generations(3).check(s)
+                })
+                .unwrap();
+            let strengths =
+                std::mem::take(&mut *evolution.algorithm().model().strengths.lock().unwrap());
+            // The starting copies are mutated before the first generation is prepared.
+            assert_eq!(strengths[..copies], vec![1; copies]);
+            populations.push(outcome.into_state().into_population().to_vec());
+        }
+        assert_eq!(populations[0], populations[1]);
+    }
+
+    #[test]
+    fn every_run_resets_the_algorithm_and_model_before_creating_its_starting_individuals() {
+        let model = || Strengthening {
+            strength: 1,
+            strengths: Mutex::new(Vec::new()),
+        };
+        assert_runs_start_afresh(GeneticAlgorithm::new(model(), Default::default()).unwrap());
+        assert_runs_start_afresh(
+            AdaptiveGeneticAlgorithm::new(model(), Default::default()).unwrap(),
+        );
+    }
+
     /// A selector that selects the fittest individual and counts its selections.
     struct CountingSelector(Arc<AtomicUsize>);
 
@@ -247,7 +428,9 @@ mod tests {
 
         for _ in 0..2 {
             let before = selections.load(Ordering::Relaxed);
-            evolution.run(&8, |p| p.generation() < 3).unwrap();
+            evolution
+                .run(&8, |s| Limits::new().generations(3).check(s))
+                .unwrap();
             assert!(selections.load(Ordering::Relaxed) >= before + 30);
         }
     }
@@ -267,9 +450,9 @@ mod tests {
                 .install(|| {
                     let mut individuals = Vec::new();
                     evolution
-                        .run(&64, |population| {
-                            individuals = population.to_vec();
-                            population.generation() < 10
+                        .run(&64, |state| {
+                            individuals = state.population().to_vec();
+                            Limits::new().generations(10).check(state)
                         })
                         .unwrap();
                     individuals
@@ -320,9 +503,9 @@ mod tests {
         // With two genes, every swap mutation moves the set bit.
         let mut first_bit_moved = false;
         evolution
-            .evolve_population(vec![Plateau(vec![true, false])], |population| {
-                first_bit_moved |= population.iter().any(|p| !p.0[0]);
-                population.generation() < 5
+            .evolve_population(vec![Plateau(vec![true, false])], |state| {
+                first_bit_moved |= state.population().iter().any(|p| !p.0[0]);
+                Limits::new().generations(5).check(state)
             })
             .unwrap();
 
@@ -365,7 +548,8 @@ mod tests {
             .unwrap()
             .into_evolution();
 
-        let result = evolution.evolve_population(vec![OneMax::from(vec![])], |_| true);
+        let result =
+            evolution.evolve_population(vec![OneMax::from(vec![])], |_| ControlFlow::Continue(()));
 
         assert_eq!(result.err(), Some(EvolutionError::EmptyPopulation));
     }

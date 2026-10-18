@@ -8,10 +8,12 @@ use std::ops::Deref;
 /// A population is never empty, and it holds only valid and distinct individuals, sorted by
 /// their fitness score in ascending order. Individuals are distinct according to their
 /// [`PartialEq`] implementation.
+///
+/// A population holds only the individuals of one generation. The history of a run, such as
+/// its generation number and the fittest individual of any generation, is kept by the
+/// [`RunState`] that holds the population.
 pub struct Population<I: Individual> {
     individuals: Vec<I>,
-    generation: usize,
-    stagnation: usize,
     stats: PopulatedStats,
 }
 
@@ -25,20 +27,13 @@ impl<I: Individual> Population<I> {
     /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual is given.
     pub fn new(mut individuals: Vec<I>) -> Result<Self, EvolutionError> {
         let stats = normalize(&mut individuals)?;
-        Ok(Self {
-            individuals,
-            generation: 0,
-            stagnation: 0,
-            stats,
-        })
+        Ok(Self { individuals, stats })
     }
 
-    /// Replaces the current population with a new generation.
+    /// Replaces the individuals of the population with those of `offspring`.
     ///
     /// The individuals in `offspring` are normalized the same way as in [`Population::new`].
-    /// On success, the generation counter is incremented, and the stagnation counter is reset
-    /// if the fitness of the best individual has improved or incremented otherwise. Upon return,
-    /// `offspring` contains the individuals of the previous generation.
+    /// Upon success, `offspring` contains the individuals that the population held before.
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if `offspring` contains no valid individual.
@@ -46,27 +41,8 @@ impl<I: Individual> Population<I> {
     pub fn replace(&mut self, offspring: &mut Vec<I>) -> Result<(), EvolutionError> {
         let stats = normalize(offspring)?;
         std::mem::swap(&mut self.individuals, offspring);
-        let previous_best = self.stats.max();
         self.stats = stats;
-        self.generation += 1;
-        if self.stats.max() > previous_best {
-            self.stagnation = 0;
-        } else {
-            self.stagnation += 1;
-        }
         Ok(())
-    }
-
-    /// Returns the current generation number of the population.
-    #[inline]
-    pub fn generation(&self) -> usize {
-        self.generation
-    }
-
-    /// Returns the number of generations since the last improvement of the best fitness score.
-    #[inline]
-    pub fn stagnation(&self) -> usize {
-        self.stagnation
     }
 
     /// Returns the statistical information regarding the fitness score of the individuals
@@ -217,17 +193,6 @@ mod tests {
     }
 
     #[test]
-    fn replace_tracks_generation_and_stagnation() {
-        let mut population = Population::new(vec![mock(1, 1.0)]).unwrap();
-
-        population.replace(&mut vec![mock(2, 1.0)]).unwrap();
-        assert_eq!((population.generation(), population.stagnation()), (1, 1));
-
-        population.replace(&mut vec![mock(3, 2.0)]).unwrap();
-        assert_eq!((population.generation(), population.stagnation()), (2, 0));
-    }
-
-    #[test]
     fn replace_without_valid_offspring_leaves_population_unchanged() {
         let mut population = Population::new(vec![mock(1, 1.0)]).unwrap();
         let mut offspring = vec![mock(2, f64::NAN)];
@@ -235,7 +200,6 @@ mod tests {
         let result = population.replace(&mut offspring);
 
         assert_eq!(result, Err(EvolutionError::EmptyPopulation));
-        assert_eq!(population.generation(), 0);
         assert_eq!(population.fittest().id, 1);
         assert!(offspring.is_empty());
     }

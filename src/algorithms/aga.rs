@@ -148,6 +148,7 @@ fn check_probability_range(
 /// ```
 /// use rusty_genes::*;
 /// use rusty_genes::one_max::*;
+/// use std::ops::ControlFlow;
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
@@ -155,9 +156,17 @@ fn check_probability_range(
 /// aga_params.selection_strategy = SelectionStrategy::Tournament(4);
 /// let mut aga = AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, aga_params)?.into_evolution();
 ///
-/// let solution = aga.run(&ONE_MAX_LENGTH, |population| {
-///     population.fittest().fitness() < 1.0 && population.generation() <= 200
-/// })?;
+/// // Stop when every bit is set, or after 200 generations.
+/// let limits = Limits::new().generations(200);
+/// let solution = aga
+///     .run(&ONE_MAX_LENGTH, |state| {
+///         if state.fittest_so_far().fitness() < 1.0 {
+///             limits.check(state)
+///         } else {
+///             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
+///         }
+///     })?
+///     .into_fittest_so_far();
 ///
 /// assert!(solution.genome().iter().all(|&one| one));
 /// # Ok::<(), EvolutionError>(())
@@ -256,18 +265,23 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
         self.parameters.population_size
     }
 
-    fn prepare_generation(&mut self, population: &Population<M::Individual>) {
-        let generation = population.generation();
+    fn start_run(&mut self) {
+        self.reproduction.reset();
+        self.model.start_run();
+    }
+
+    fn prepare_generation(&mut self, state: &RunState<M::Individual>) {
+        let population = state.population();
+        let generation = state.generation();
         if generation == 0 {
             self.reference_std = population.stats().std();
-            self.reproduction.reset();
             self.set_rates(1.0, 0.0);
         } else if generation % self.parameters.parameter_adjustment_interval == 0 {
             let diversity = self.diversity(population);
             self.set_rates(diversity, 1.0 - diversity);
         }
 
-        self.model.prepare(population);
+        self.model.prepare(state);
         self.reproduction.prepare(population);
     }
 
@@ -283,12 +297,12 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
     #[inline]
     fn generate_offspring(
         &self,
-        population: &Population<M::Individual>,
+        state: &RunState<M::Individual>,
         offspring: &mut Vec<M::Individual>,
         rng: &mut Rng,
     ) {
         let size = self.population_size();
         self.reproduction
-            .breed_into(&self.model, population, offspring, size, rng);
+            .breed_into(&self.model, state.population(), offspring, size, rng);
     }
 }

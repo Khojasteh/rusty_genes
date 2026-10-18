@@ -109,6 +109,7 @@ impl GeneticAlgorithmParameters {
 /// ```
 /// use rusty_genes::*;
 /// use rusty_genes::one_max::*;
+/// use std::ops::ControlFlow;
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
@@ -118,9 +119,17 @@ impl GeneticAlgorithmParameters {
 /// ga_params.selection_strategy = SelectionStrategy::Linear(1.25);
 /// let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, ga_params)?.into_evolution();
 ///
-/// let solution = ga.run(&ONE_MAX_LENGTH, |population| {
-///     population.fittest().fitness() < 1.0 && population.generation() <= 200
-/// })?;
+/// // Stop when every bit is set, or after 200 generations.
+/// let limits = Limits::new().generations(200);
+/// let solution = ga
+///     .run(&ONE_MAX_LENGTH, |state| {
+///         if state.fittest_so_far().fitness() < 1.0 {
+///             limits.check(state)
+///         } else {
+///             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
+///         }
+///     })?
+///     .into_fittest_so_far();
 ///
 /// assert!(solution.genome().iter().all(|&one| one));
 /// # Ok::<(), EvolutionError>(())
@@ -185,12 +194,14 @@ impl<M: EvolutionModel> EvolutionAlgorithm for GeneticAlgorithm<M> {
         self.parameters.population_size
     }
 
-    fn prepare_generation(&mut self, population: &Population<M::Individual>) {
-        if population.generation() == 0 {
-            self.reproduction.reset();
-        }
-        self.model.prepare(population);
-        self.reproduction.prepare(population);
+    fn start_run(&mut self) {
+        self.reproduction.reset();
+        self.model.start_run();
+    }
+
+    fn prepare_generation(&mut self, state: &RunState<M::Individual>) {
+        self.model.prepare(state);
+        self.reproduction.prepare(state.population());
     }
 
     #[inline]
@@ -205,12 +216,12 @@ impl<M: EvolutionModel> EvolutionAlgorithm for GeneticAlgorithm<M> {
     #[inline]
     fn generate_offspring(
         &self,
-        population: &Population<M::Individual>,
+        state: &RunState<M::Individual>,
         offspring: &mut Vec<M::Individual>,
         rng: &mut Rng,
     ) {
         let size = self.population_size();
         self.reproduction
-            .breed_into(&self.model, population, offspring, size, rng);
+            .breed_into(&self.model, state.population(), offspring, size, rng);
     }
 }
