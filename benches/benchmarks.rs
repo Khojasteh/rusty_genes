@@ -290,8 +290,9 @@ pub fn benchmark_generation_steps<M: Measurement>(
     let individuals = (0..population_size)
         .map(|_| OneMax::new_random(&genome_length, &mut rng))
         .collect::<Vec<_>>();
-    let population = ga.initialize_population(individuals.clone()).unwrap();
-    ga.prepare_generation(&population);
+    let state = RunState::new(ga.initialize_population(individuals.clone()).unwrap());
+    let population = state.population();
+    ga.prepare_generation(&state);
 
     group.throughput(Throughput::Elements(population_size as u64));
 
@@ -309,7 +310,7 @@ pub fn benchmark_generation_steps<M: Measurement>(
         let reproduction = ga.reproduction();
         b.iter(|| {
             for _ in 0..population_size {
-                black_box(reproduction.breed(&model, &population, &mut rng));
+                black_box(reproduction.breed(&model, population, &mut rng));
             }
         });
     });
@@ -319,7 +320,7 @@ pub fn benchmark_generation_steps<M: Measurement>(
         let mut rng = Rng::from_seed(0);
         b.iter_batched_ref(
             || Vec::with_capacity(population_size),
-            |offspring| ga.generate_offspring(&population, offspring, &mut rng),
+            |offspring| ga.generate_offspring(&state, offspring, &mut rng),
             BatchSize::SmallInput,
         );
     });
@@ -342,6 +343,7 @@ pub fn benchmark_evolution<M: Measurement>(
             .extend((0..population_size).map(|_| OneMax::new_random(&genome_length, &mut rng)));
     }
 
+    let limits = Limits::new().generations(generations);
     group.sample_size(20);
     group.throughput(Throughput::Elements(generations as u64));
 
@@ -354,11 +356,7 @@ pub fn benchmark_evolution<M: Measurement>(
             .with_seed(0);
         b.iter_batched(
             || initial_population.clone(),
-            |individuals| {
-                evolution.evolve_population(individuals, |population| {
-                    population.generation() < generations
-                })
-            },
+            |individuals| evolution.evolve_population(individuals, |state| limits.check(state)),
             BatchSize::SmallInput,
         );
     });
@@ -372,11 +370,7 @@ pub fn benchmark_evolution<M: Measurement>(
             .with_seed(0);
         b.iter_batched(
             || initial_population.clone(),
-            |individuals| {
-                evolution.evolve_population(individuals, |population| {
-                    population.generation() < generations
-                })
-            },
+            |individuals| evolution.evolve_population(individuals, |state| limits.check(state)),
             BatchSize::SmallInput,
         );
     });

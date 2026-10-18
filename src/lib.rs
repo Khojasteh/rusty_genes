@@ -9,10 +9,13 @@
 //!
 //! An algorithm, such as [`GeneticAlgorithm`] or [`AdaptiveGeneticAlgorithm`], evolves a
 //! [`Population`] of individuals generation by generation, and an [`Evolution`] runs it. The
-//! algorithms breed offspring through a [`Reproduction`], which selects parents by a
-//! [`SelectionMechanism`] and keeps an offspring only if its [`SurvivalPolicy`] accepts it. Each
-//! of these can be replaced by an implementation of its trait, and [`EvolutionAlgorithm`] defines
-//! the steps of a custom algorithm.
+//! [`RunState`] of a run holds its population and history, such as its generation number and
+//! the fittest individual of any generation, and a progress callback observes it to decide when
+//! the run stops, for example by [`Limits`]. The algorithms breed offspring through a
+//! [`Reproduction`], which selects parents by a [`SelectionMechanism`] and keeps an offspring
+//! only if its [`SurvivalPolicy`] accepts it. Each of these can be replaced by an
+//! implementation of its trait, and [`EvolutionAlgorithm`] defines the steps of a custom
+//! algorithm.
 //!
 //! The crossover, mutation, and selection strategies are available as building blocks for models
 //! and algorithms: see [`CrossoverStrategy`], [`MutationStrategy`], and [`SelectionStrategy`].
@@ -25,15 +28,23 @@
 //! ```
 //! use rusty_genes::one_max::*;
 //! use rusty_genes::*;
+//! use std::ops::ControlFlow;
 //!
 //! let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())?
 //!     .into_evolution()
 //!     .with_seed(42);
 //!
 //! // Evolve 64-bit strings towards all '1' bits for at most 100 generations.
-//! let solution = evolution.run(&64, |population| {
-//!     population.fittest().fitness() < 1.0 && population.generation() < 100
+//! let limits = Limits::new().generations(100);
+//! let outcome = evolution.run(&64, |state| {
+//!     if state.fittest_so_far().fitness() < 1.0 {
+//!         limits.check(state)
+//!     } else {
+//!         ControlFlow::Break(StopReason::Custom("every bit is set".into()))
+//!     }
 //! })?;
+//! println!("Stopped at generation {}: {}", outcome.state().generation(), outcome.reason());
+//! let solution = outcome.into_fittest_so_far();
 //! assert_eq!(solution.genome().len(), 64);
 //! # Ok::<(), EvolutionError>(())
 //! ```
@@ -54,7 +65,9 @@ mod operators;
 mod population;
 mod reproduction;
 mod rng;
+mod run_state;
 mod stats;
+mod stopping;
 
 pub use algorithms::*;
 pub use error::*;
@@ -65,7 +78,9 @@ pub use operators::*;
 pub use population::*;
 pub use reproduction::*;
 pub use rng::*;
+pub use run_state::*;
 pub use stats::*;
+pub use stopping::*;
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]

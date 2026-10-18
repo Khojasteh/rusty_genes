@@ -61,11 +61,20 @@ pub trait EvolutionModel: Sync {
     /// [`Individual::is_valid`] return [`false`].
     fn evaluate(&self, individual: &mut Self::Individual);
 
-    /// Prepares the model for breeding the next generation from `population`.
+    /// Starts a new run, before its starting individuals are created.
+    ///
+    /// A model that adapts its own state during a run, such as in [`prepare`](Self::prepare),
+    /// resets it here, so that every run starts as if the model were new. The algorithms of this
+    /// library call this method from [`EvolutionAlgorithm::start_run`]. The default
+    /// implementation performs no operation.
+    fn start_run(&mut self) {}
+
+    /// Prepares the model for breeding the next generation from the population of `state`.
     ///
     /// # Note
     /// The algorithms of this library call this method once per generation, before breeding.
     /// A model may use it to adapt its own state, such as the strength of its mutation, to the
-    /// population. The default implementation performs no operation.
-    fn prepare(&mut self, _population: &Population<Self::Individual>) {}
+    /// population or the progress of the run. The default implementation performs no
+    /// operation.
+    fn prepare(&mut self, _state: &RunState<Self::Individual>) {}
 }
