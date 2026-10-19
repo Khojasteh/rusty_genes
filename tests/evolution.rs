@@ -122,6 +122,50 @@ fn invalid_goal_scores_are_rejected_before_progress() {
 }
 
 #[test]
+fn each_run_takes_its_goal_from_its_own_initial_population() {
+    /// A model that records the best initial score of every population it takes a goal from.
+    struct RecordedGoals(WeightedBits, Mutex<Vec<f64>>);
+
+    impl EvolutionModel for RecordedGoals {
+        type Individual = BitGenome;
+        fn goal_score(&self, initial_population: &Population<BitGenome>) -> Option<f64> {
+            let score = initial_population.fittest().score();
+            self.1.lock().unwrap().push(score);
+            Some(score + 1.0)
+        }
+        fn crossover(&self, first: &BitGenome, second: &BitGenome, rng: &mut Rng) -> BitGenome {
+            self.0.crossover(first, second, rng)
+        }
+        fn mutate(&self, individual: &mut BitGenome, rng: &mut Rng) {
+            self.0.mutate(individual, rng);
+        }
+        fn evaluate(&self, individual: &mut BitGenome) {
+            self.0.evaluate(individual);
+        }
+    }
+
+    let model = RecordedGoals(
+        WeightedBits::new(vec![1.0, 2.0], Objective::Maximize),
+        Mutex::new(Vec::new()),
+    );
+    let mut evolution = GeneticAlgorithm::new(model, parameters(1, 0.0))
+        .unwrap()
+        .into_evolution()
+        .with_seed(0);
+    for genes in [vec![true, false], vec![false, false]] {
+        evolution
+            .evolve_population(vec![BitGenome::from(genes)], |s| {
+                Limits::new().generations(3).check(s)
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        *evolution.algorithm().model().1.lock().unwrap(),
+        vec![1.0, 0.0]
+    );
+}
+
+#[test]
 fn all_entry_points_and_both_algorithms_stop_at_the_goal() {
     fn assert_goal_reached(outcome: Outcome<BitGenome>, genes: Vec<bool>) {
         assert_eq!(outcome.reason(), &StopReason::GoalReached);

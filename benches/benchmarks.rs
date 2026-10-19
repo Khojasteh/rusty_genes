@@ -1,7 +1,13 @@
+// The benchmarks run the model of the OneMax example; its `main` is not used here.
+#[allow(dead_code)]
+#[path = "../examples/one_max.rs"]
+mod one_max;
+
 use criterion::{
     BatchSize, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
     measurement::*,
 };
+use one_max::*;
 use rusty_genes::*;
 use std::{
     hash::{Hash, Hasher},
@@ -317,8 +323,6 @@ pub fn benchmark_generation_steps<M: Measurement>(
     genome_length: usize,
     population_size: usize,
 ) {
-    use rusty_genes::one_max::*;
-
     let model = OneMaxEvolutionModel;
     let mut parameters = GeneticAlgorithmParameters::default();
     parameters.population_size = population_size;
@@ -375,8 +379,6 @@ pub fn benchmark_evolution<M: Measurement>(
     population_size: usize,
     generations: usize,
 ) {
-    use rusty_genes::one_max::*;
-
     let mut initial_population = Vec::with_capacity(population_size);
     {
         let mut rng = Rng::from_seed(0);
