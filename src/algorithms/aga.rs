@@ -134,6 +134,8 @@ fn check_probability_range(
 /// the mutation rate, which exploits the existing diversity through crossover. When diversity is
 /// low, it decreases the crossover rate and increases the mutation rate, which encourages
 /// exploration by introducing more diversity into the population.
+/// The spread ratio is computed using scaled statistics so it remains usable even when the
+/// standard deviations of the fitness scores would overflow.
 ///
 /// The rates start at the highest crossover rate and the lowest mutation rate, and are adjusted
 /// at the configured interval. The algorithm breeds its offspring by a [`Reproduction`], whose
@@ -176,7 +178,7 @@ pub struct AdaptiveGeneticAlgorithm<M: EvolutionModel> {
     parameters: AdaptiveGeneticAlgorithmParameters,
     elite_count: usize,
     reproduction: Reproduction<M::Individual>,
-    reference_std: f64,
+    reference_spread: Option<Spread>,
 }
 
 impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
@@ -199,7 +201,7 @@ impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
             elite_count: elite_count(parameters.population_size, parameters.elitism_rate),
             parameters,
             reproduction,
-            reference_std: 0.0,
+            reference_spread: None,
         })
     }
 
@@ -239,16 +241,11 @@ impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
     /// Returns the diversity of the population, between 0.0 and 1.0, relative to the reference
     /// standard deviation, which it adopts first if there is none yet.
     fn diversity(&mut self, population: &Population<M::Individual>) -> f64 {
-        let std = population.stats().std();
-        if self.reference_std <= 0.0 {
-            self.reference_std = std;
-        }
-        let ratio = std / self.reference_std;
-        if ratio.is_nan() {
-            0.0
-        } else {
-            ratio.clamp(0.0, 1.0)
-        }
+        let Some(spread) = population.stats().spread() else {
+            return 0.0;
+        };
+        let reference = self.reference_spread.get_or_insert(spread);
+        spread.ratio(*reference).clamp(0.0, 1.0)
     }
 }
 
@@ -274,7 +271,7 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
         let population = state.population();
         let generation = state.generation();
         if generation == 0 {
-            self.reference_std = population.stats().std();
+            self.reference_spread = population.stats().spread();
             self.set_rates(1.0, 0.0);
         } else if generation % self.parameters.parameter_adjustment_interval == 0 {
             let diversity = self.diversity(population);

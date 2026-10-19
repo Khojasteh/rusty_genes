@@ -11,8 +11,10 @@
 /// - The variance (`var`)
 /// - The standard deviation (`std`)
 ///
-/// This struct uses Welford's online algorithm to provide an efficient and
-/// numerically stable calculation of the variance.
+/// This struct uses Welford's online algorithm with power-of-two scaling to avoid overflow in
+/// intermediate calculations for finite samples. Variance can still overflow or underflow if
+/// its result cannot be represented by `f64`; standard deviation is computed independently of
+/// that rounding, so it can remain representable in those cases.
 ///
 /// # Example
 /// ```
@@ -29,15 +31,33 @@
 /// assert_eq!(stats.var(), Some(2.5));
 /// assert!((stats.std().unwrap() - 1.58113883).abs() < 1e-6);
 /// ```
-#[derive(Debug, Default, Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct Stats {
     count: usize,
     min: f64,
     arg_min: usize,
     max: f64,
     arg_max: usize,
-    avg: f64,
-    sum_squared: f64,
+    scaled_mean: f64,
+    scaled_m2: f64,
+    // scaled_mean is in units of scale; scaled_m2 is in units of scale squared.
+    // scale is always a positive, normal power of two.
+    scale: f64,
+}
+
+impl Default for Stats {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            min: 0.0,
+            arg_min: 0,
+            max: 0.0,
+            arg_max: 0,
+            scaled_mean: 0.0,
+            scaled_m2: 0.0,
+            scale: f64::MIN_POSITIVE,
+        }
+    }
 }
 
 impl Stats {
@@ -88,7 +108,7 @@ impl Stats {
     pub fn avg(&self) -> Option<f64> {
         match self.count {
             0 => None,
-            _ => Some(self.avg),
+            _ => Some(self.scaled_mean * self.scale),
         }
     }
 
@@ -98,14 +118,26 @@ impl Stats {
         match self.count {
             0 => None,
             1 => Some(0.0),
-            _ => Some(self.sum_squared / (self.count - 1) as f64),
+            _ => Some((self.scaled_variance() * self.scale) * self.scale),
         }
     }
 
     /// Returns the standard deviation of the sample values.
     #[inline]
     pub fn std(&self) -> Option<f64> {
-        self.var().map(f64::sqrt)
+        match self.count {
+            0 => None,
+            _ => Some(self.scaled_variance().sqrt() * self.scale),
+        }
+    }
+
+    #[inline]
+    fn scaled_variance(&self) -> f64 {
+        if self.count > 1 {
+            self.scaled_m2 / (self.count - 1) as f64
+        } else {
+            0.0
+        }
     }
 
     /// Records a new sample and updates all statistical data accordingly.
@@ -132,6 +164,19 @@ impl Stats {
     /// ```
     #[inline]
     pub fn record(&mut self, sample: f64) {
+        if sample.is_finite() && sample != 0.0 {
+            // Clearing the significand gives a power of two. Subnormal samples use the
+            // smallest normal scale so their squared normalized values remain representable.
+            let scale =
+                f64::from_bits(sample.to_bits() & 0x7ff0_0000_0000_0000).max(f64::MIN_POSITIVE);
+            if scale > self.scale {
+                let ratio = self.scale / scale;
+                self.scaled_mean *= ratio;
+                self.scaled_m2 *= ratio * ratio;
+                self.scale = scale;
+            }
+        }
+        let scaled_sample = sample / self.scale;
         if self.count != 0 {
             if sample < self.min {
                 self.min = sample;
@@ -144,17 +189,17 @@ impl Stats {
 
             // Welford's online algorithm
             self.count += 1;
-            let delta = sample - self.avg;
-            self.avg += delta / self.count as f64;
-            self.sum_squared += delta * (sample - self.avg);
+            let delta = scaled_sample - self.scaled_mean;
+            self.scaled_mean += delta / self.count as f64;
+            self.scaled_m2 += delta * (scaled_sample - self.scaled_mean);
         } else {
             self.count = 1;
             self.min = sample;
             self.arg_min = 0;
             self.max = sample;
             self.arg_max = 0;
-            self.avg = sample;
-            self.sum_squared = 0.0;
+            self.scaled_mean = scaled_sample;
+            self.scaled_m2 = 0.0;
         }
     }
 
@@ -206,44 +251,11 @@ impl Stats {
 
 impl FromIterator<f64> for Stats {
     fn from_iter<I: IntoIterator<Item = f64>>(iter: I) -> Self {
-        let mut samples = iter.into_iter();
-        let Some(first_sample) = samples.next() else {
-            return Default::default();
-        };
-
-        let mut count = 1;
-        let mut min = first_sample;
-        let mut arg_min = 0;
-        let mut max = first_sample;
-        let mut arg_max = 0;
-        let mut avg = first_sample;
-        let mut sum_squared = 0.0;
-
-        for sample in samples {
-            if sample < min {
-                min = sample;
-                arg_min = count;
-            }
-            if sample > max {
-                max = sample;
-                arg_max = count;
-            }
-
-            count += 1;
-            let delta = sample - avg;
-            avg += delta / count as f64;
-            sum_squared += delta * (sample - avg);
+        let mut stats = Self::default();
+        for sample in iter {
+            stats.record(sample);
         }
-
-        Self {
-            count,
-            min,
-            arg_min,
-            max,
-            arg_max,
-            avg,
-            sum_squared,
-        }
+        stats
     }
 }
 
@@ -282,7 +294,27 @@ pub struct PopulatedStats {
     stats: Stats,
 }
 
+/// A standard deviation represented without restoring units that might overflow `f64`.
+#[derive(Clone, Copy)]
+pub(crate) struct Spread {
+    scaled_std: f64,
+    scale: f64,
+}
+
+impl Spread {
+    pub(crate) fn ratio(self, reference: Self) -> f64 {
+        (self.scaled_std / reference.scaled_std) * (self.scale / reference.scale)
+    }
+}
+
 impl PopulatedStats {
+    pub(crate) fn spread(&self) -> Option<Spread> {
+        let variance = self.stats.scaled_variance();
+        (variance > 0.0).then(|| Spread {
+            scaled_std: variance.sqrt(),
+            scale: self.stats.scale,
+        })
+    }
     /// Returns the total number of samples.
     #[inline]
     pub fn count(&self) -> usize {
@@ -316,23 +348,19 @@ impl PopulatedStats {
     /// Returns the average (mean) of the sample values.
     #[inline]
     pub fn avg(&self) -> f64 {
-        self.stats.avg
+        self.stats.avg().unwrap()
     }
 
     /// Returns the variance of the sample values.
     #[inline]
     pub fn var(&self) -> f64 {
-        if self.stats.count > 1 {
-            self.stats.sum_squared / (self.stats.count - 1) as f64
-        } else {
-            0.0
-        }
+        self.stats.var().unwrap()
     }
 
     /// Returns the standard deviation of the sample values.
     #[inline]
     pub fn std(&self) -> f64 {
-        self.var().sqrt()
+        self.stats.std().unwrap()
     }
 
     /// Updates the `arg_min` value. This method is useful when the order of
@@ -414,5 +442,64 @@ impl std::fmt::Display for PopulatedStats {
                 self.std()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn statistics_preserve_representable_results_at_extreme_scales() {
+        for scale in [1.0, 1e154, 1e-200, f64::MIN_POSITIVE, f64::from_bits(1)] {
+            let samples = [-scale, 0.0, scale];
+            let batch = samples.into_iter().collect::<Stats>();
+            let mut streaming = Stats::default();
+            for sample in samples {
+                streaming.record(sample);
+            }
+            for stats in [batch, streaming] {
+                assert_eq!(stats.avg(), Some(0.0));
+                // The sample variance of [-s, 0, s] is s squared, so its STD is s.
+                assert!((stats.std().unwrap() / scale - 1.0).abs() <= 4.0 * f64::EPSILON);
+                if scale >= 1.0 {
+                    assert!(
+                        (stats.var().unwrap() / (scale * scale) - 1.0).abs() <= 4.0 * f64::EPSILON
+                    );
+                }
+                let snapshot = stats.snapshot().unwrap();
+                assert_eq!(snapshot.avg(), stats.avg().unwrap());
+                assert_eq!(snapshot.var(), stats.var().unwrap());
+                assert_eq!(snapshot.std(), stats.std().unwrap());
+            }
+        }
+        let stats = [-1e308, 1e308].into_iter().collect::<Stats>();
+        assert_eq!(stats.avg(), Some(0.0));
+        assert!(stats.std().unwrap().is_finite());
+    }
+
+    #[test]
+    fn statistics_keep_empty_singleton_and_changing_scale_semantics() {
+        let empty = Stats::default();
+        assert_eq!(empty.avg(), None);
+        assert_eq!(empty.var(), None);
+        assert_eq!(empty.std(), None);
+        assert!(empty.snapshot().is_none());
+
+        let mut stats = Stats::default();
+        stats.record(0.0);
+        assert_eq!(stats.var(), Some(0.0));
+        assert_eq!(stats.std(), Some(0.0));
+        stats.record(1e-200);
+        stats.record(-1e-200);
+        assert_eq!(stats.avg(), Some(0.0));
+        assert!((stats.std().unwrap() / 1e-200 - 1.0).abs() <= 4.0 * f64::EPSILON);
+        stats.record(1e154);
+        stats.record(-1e154);
+        assert_eq!(stats.count(), 5);
+        assert_eq!(stats.avg(), Some(0.0));
+        assert_eq!(stats.arg_min(), Some(4));
+        assert_eq!(stats.arg_max(), Some(3));
+        assert!((stats.var().unwrap() / 5e307 - 1.0).abs() <= 4.0 * f64::EPSILON);
     }
 }
