@@ -36,43 +36,24 @@ feature.
 
 ## Quick start
 
-The library includes the OneMax problem, which looks for a string of bits that are all `1`.
-Its score is the number of set bits, so a 100-bit solution has a maximum score of 100.
-This runs the genetic algorithm on it with the default parameters:
+The [OneMax example](examples/one_max.rs) evolves strings of bits towards one in which every bit
+is `1`. Its score is the number of set bits, so a 100-bit solution has a maximum score of 100.
+The example defines the problem's individual and model, and runs the genetic algorithm on them
+with the default parameters:
 
-```rust
-use rusty_genes::one_max::*;
-use rusty_genes::*;
-
-const GENOME_LENGTH: usize = 100;
-
-let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
-    .expect("the default parameters are valid")
-    .into_evolution()
-    .with_seed(42);
-
-// Evolve 100-bit strings until one has only '1' bits, or for at most 200 generations.
-let limits = Limits::new().generations(200);
-let outcome = evolution
-    .run(&GENOME_LENGTH, |state| {
-        limits.check(state)
-    })
-    .expect("random OneMax individuals are valid");
-
-println!("Stopped: {}", outcome.reason());
-println!("Best score: {}", outcome.into_fittest_so_far().score());
+```sh
+cargo run --example one_max
 ```
 
-`run` creates a random initial population and calls the closure before each generation. The
-closure receives the `RunState` of the run, with its population, generation number,
-stagnation, fittest individual so far, and elapsed time, and returns `ControlFlow::Break` with
-a `StopReason` to stop the run; `Limits` stops it after a number of generations, generations
-without improvement, or a time. The model's goal also stops the run automatically. OneMax's
-goal is the genome length, so no score check is needed in the closure. `run` returns an
-`Outcome` with the final state of the run, including the fittest individual of any
-generation, and the reason it stopped. With the
-seed, every run gives the same result; without it, each run is seeded from the operating
-system.
+It runs the algorithm with `Evolution::run`, which creates a random initial population and calls
+a closure before each generation. The closure receives the `RunState` of the run, with its
+population, generation number, stagnation, fittest individual so far, and elapsed time, and
+returns `ControlFlow::Break` with a `StopReason` to stop the run; `Limits` stops it after a
+number of generations, generations without improvement, or a time. The model's goal also stops
+the run automatically. OneMax's goal is the genome length, so no score check is needed in the
+closure. `run` returns an `Outcome` with the final state of the run, including the best
+individual of any generation, and the reason it stopped. With a seed, every run gives the same
+result; without it, each run is seeded from the operating system.
 
 ## Defining your own problem
 
@@ -203,25 +184,19 @@ be replaced, including by your own implementations of `SelectionMechanism` and
 `SurvivalPolicy`:
 
 ```rust
-use rusty_genes::one_max::*;
 use rusty_genes::*;
 
-let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
-    .expect("the default parameters are valid");
-
-// Every valid offspring survives, instead of only those at least as fit as their fittest parent.
-ga.reproduction_mut().set_survival(Generational);
-ga.reproduction_mut()
-    .set_selector(TournamentSelection::new(4).expect("the size is positive"));
-
-let limits = Limits::new().generations(50);
-let solution = ga
-    .into_evolution()
-    .run(&100, |state| limits.check(state))
-    .expect("random OneMax individuals are valid")
-    .into_fittest_so_far();
-
-println!("Best score: {}", solution.score());
+/// Creates a genetic algorithm for `model` that selects parents by tournaments of four, and in
+/// which every valid offspring survives, instead of only those at least as fit as their fittest
+/// parent.
+fn generational_tournament<M: EvolutionModel>(
+    model: M,
+) -> Result<GeneticAlgorithm<M>, EvolutionError> {
+    let mut ga = GeneticAlgorithm::new(model, Default::default())?;
+    ga.reproduction_mut().set_survival(Generational);
+    ga.reproduction_mut().set_selector(TournamentSelection::new(4)?);
+    Ok(ga)
+}
 ```
 
 ## Documentation

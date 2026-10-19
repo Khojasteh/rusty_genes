@@ -48,10 +48,11 @@ impl fmt::Display for StopReason {
 /// progress callback whether the run continues, and why it stops.
 ///
 /// # Example
-/// Runs the genetic algorithm on the OneMax problem for at most 500 generations, 50 of them
-/// without improvement.
+/// Runs the genetic algorithm on the model of the [OneMax example] until it finds the best
+/// solution, or for at most 500 generations, 50 of them without improvement.
 /// ```
-/// use rusty_genes::one_max::*;
+/// # mod one_max { include!("../examples/one_max.rs"); }
+/// # use one_max::*;
 /// use rusty_genes::*;
 ///
 /// let limits = Limits::new().generations(500).stagnation(50);
@@ -64,6 +65,8 @@ impl fmt::Display for StopReason {
 /// println!("Stopped after {} generations: {}", outcome.state().generation(), outcome.reason());
 /// # Ok::<(), EvolutionError>(())
 /// ```
+///
+/// [OneMax example]: https://github.com/Khojasteh/rusty_genes/blob/master/examples/one_max.rs
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     generations: Option<usize>,

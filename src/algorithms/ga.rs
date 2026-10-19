@@ -100,9 +100,11 @@ impl GeneticAlgorithmParameters {
 /// may be better suited to problems with varying search landscapes.
 ///
 /// # Example
+/// Runs the algorithm on the model of the [OneMax example].
 /// ```
+/// # mod one_max { include!("../../examples/one_max.rs"); }
+/// # use one_max::*;
 /// use rusty_genes::*;
-/// use rusty_genes::one_max::*;
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
@@ -120,6 +122,8 @@ impl GeneticAlgorithmParameters {
 /// println!("Best score: {} of {}", solution.score(), ONE_MAX_LENGTH);
 /// # Ok::<(), EvolutionError>(())
 /// ```
+///
+/// [OneMax example]: https://github.com/Khojasteh/rusty_genes/blob/master/examples/one_max.rs
 pub struct GeneticAlgorithm<M: EvolutionModel> {
     model: M,
     parameters: GeneticAlgorithmParameters,

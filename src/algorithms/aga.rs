@@ -146,9 +146,11 @@ fn check_probability_range(
 /// components such as the crossover and mutation operators, and the score function.
 ///
 /// # Example
+/// Runs the algorithm on the model of the [OneMax example].
 /// ```
+/// # mod one_max { include!("../../examples/one_max.rs"); }
+/// # use one_max::*;
 /// use rusty_genes::*;
-/// use rusty_genes::one_max::*;
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
@@ -164,6 +166,8 @@ fn check_probability_range(
 /// println!("Best score: {} of {}", solution.score(), ONE_MAX_LENGTH);
 /// # Ok::<(), EvolutionError>(())
 /// ```
+///
+/// [OneMax example]: https://github.com/Khojasteh/rusty_genes/blob/master/examples/one_max.rs
 pub struct AdaptiveGeneticAlgorithm<M: EvolutionModel> {
     model: M,
     parameters: AdaptiveGeneticAlgorithmParameters,

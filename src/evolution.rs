@@ -24,9 +24,11 @@ use std::{ops::ControlFlow, time::Instant};
 /// * `A` - The evolutionary algorithm to run.
 ///
 /// # Example
+/// Runs the genetic algorithm on the model of the [OneMax example].
 /// ```
+/// # mod one_max { include!("../examples/one_max.rs"); }
+/// # use one_max::*;
 /// use rusty_genes::*;
-/// use rusty_genes::one_max::*;
 ///
 /// let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())?
 ///     .into_evolution()
@@ -37,6 +39,8 @@ use std::{ops::ControlFlow, time::Instant};
 /// assert_eq!(best.genome().len(), 50);
 /// # Ok::<(), EvolutionError>(())
 /// ```
+///
+/// [OneMax example]: https://github.com/Khojasteh/rusty_genes/blob/master/examples/one_max.rs
 pub struct Evolution<A: EvolutionAlgorithm> {
     algorithm: A,
     seed: Option<u64>,
