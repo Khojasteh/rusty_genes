@@ -207,7 +207,7 @@ pub fn common_neighbors<G>(genome1: &[G], genome2: &[G]) -> Vec<(G, G)>
 where
     G: Copy + PartialOrd + Eq + Hash,
 {
-    if genome1.len() < 2 || genome2.len() <= 2 {
+    if genome1.len() < 2 || genome2.len() < 2 {
         return Vec::new();
     }
 
@@ -338,6 +338,17 @@ fn extend_chain<G>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn common_neighbors_handles_small_genomes_symmetrically() {
+        assert!(common_neighbors::<u32>(&[], &[]).is_empty());
+        assert!(common_neighbors(&[0], &[0]).is_empty());
+        assert!(!common_neighbors(&[0, 1], &[0, 1]).is_empty());
+        let forward = common_neighbors(&[0, 1], &[0, 1, 2]);
+        let backward = common_neighbors(&[0, 1, 2], &[0, 1]);
+        assert_eq!(forward, backward);
+        assert_eq!(common_partitions(&[0, 1], &[0, 1]), vec![vec![0, 1]]);
+    }
 
     #[test]
     fn common_partitions_keeps_a_chain_through_the_first_gene_whole() {
