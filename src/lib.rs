@@ -43,9 +43,7 @@
 //!
 //! // Evolve 64-bit strings towards all '1' bits for at most 100 generations.
 //! let limits = Limits::new().generations(100);
-//! let outcome = evolution.run(&GENOME_LENGTH, |state| {
-//!     limits.check(state)
-//! })?;
+//! let outcome = evolution.run(&GENOME_LENGTH, |state| limits.check(state))?;
 //! println!("Stopped at generation {}: {}", outcome.state().generation(), outcome.reason());
 //! let solution = outcome.into_fittest_so_far();
 //! assert_eq!(solution.genome().len(), 64);
@@ -94,13 +92,6 @@ pub use stopping::*;
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
-
-/// Returns the value at `ratio` of the way from `min` to `max`, where a ratio of 0.0 gives `min`
-/// and 1.0 gives `max`.
-#[inline]
-pub(crate) fn interpolate_f64(min: f64, max: f64, ratio: f64) -> f64 {
-    min + (max - min) * ratio
-}
 
 /// Returns the value at `ratio` of the way from `min` to `max`, rounded down. `max` must not be
 /// less than `min`.
