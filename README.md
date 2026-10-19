@@ -15,8 +15,8 @@ that suit your problem, and you can replace any step of an algorithm with your o
   its crossover and mutation rates to the diversity of the population. Runs stop automatically
   when the model's goal score is reached.
 - **Selection:** tournament, roulette wheel, Boltzmann, rank, linear, and elitist.
-- **Crossover:** generalized partition (GPX2), sequential constructive (SCX), edge recombination
-  (ERX), partially mapped (PMX), order (OX), cycle (CX), and single-point (SPX).
+- **Crossover:** common partition, successor, edge recombination (ERX), partially mapped (PMX),
+  order (OX), cycle (CX), and single-point (SPX).
 - **Mutation:** swap, scramble, inversion, insertion, and duplicate.
 - **Extensibility:** custom models, selection mechanisms, survival policies, and algorithms
   through traits.
