@@ -635,8 +635,7 @@ mod tests {
 
     impl Hash for MockIndividual {
         fn hash<H: Hasher>(&self, state: &mut H) {
-            // Adding zero turns -0.0 into 0.0, which it equals.
-            (self.score + 0.0).to_bits().hash(state);
+            hash_f64(self.score, state);
         }
     }
 

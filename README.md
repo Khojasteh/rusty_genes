@@ -186,8 +186,9 @@ Keep these in mind when you define a model:
 - Implement `PartialEq` and `Hash` on the genome alone, excluding the cached score, as in the
   example. Equal individuals must have equal hashes. Populations remove duplicates by comparing
   only individuals with equal hashes; when equal genomes have different scores, they keep the
-  better evaluation under the population's objective. A constant hash is valid for a genome
-  that cannot be hashed, but deduplication then compares every pair, in quadratic time.
+  better evaluation under the population's objective. `f64` has no `Hash`; hash floating-point
+  genes with `hash_f64` or `hash_f64_slice`, which agree with `==`. A constant hash is valid for
+  a genome that cannot be hashed, but deduplication then compares every pair, in quadratic time.
 - Use an invalid score until a new or changed genome has been evaluated; the engine evaluates
   the initial population and every offspring before admitting them.
 - Individuals are bred and evaluated on several threads, so the model must be `Sync`.
