@@ -1,5 +1,4 @@
 use super::*;
-use std::ops::RangeInclusive;
 
 /// Represents the parameters of an [`AdaptiveGeneticAlgorithm`].
 ///
@@ -7,8 +6,9 @@ use std::ops::RangeInclusive;
 /// [`AdaptiveGeneticAlgorithm::new`], which validates them. Stopping belongs to the model's goal
 /// and the progress callback supplied to [`Evolution`].
 ///
-/// New parameters may be added in the future, so the parameters are created by
-/// [`Default::default`] and then changed as needed.
+/// The rates are the constants `k1` to `k4` of Srinivas and Patnaik, and their defaults are the
+/// values they chose. See [`AdaptiveGeneticAlgorithm`] for how the rates of a candidate follow
+/// from them.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct AdaptiveGeneticAlgorithmParameters {
@@ -30,31 +30,42 @@ pub struct AdaptiveGeneticAlgorithmParameters {
     /// current generation. The number of elites is rounded down.
     pub elitism_rate: f64,
 
-    /// The range of the probability of two individuals combining their genetic information to
-    /// produce an offspring.
+    /// The crossover rate of two parents the fitter of which has the average score (`k1`).
     ///
     /// # Note
-    /// Both bounds must be between 0.0 and 1.0, inclusive, and the start must not exceed the end.
-    /// The crossover rate moves towards the end of the range as the diversity of the population
-    /// increases.
-    pub crossover_rate_range: RangeInclusive<f64>,
+    /// `crossover_rate` must be between 0.0 and 1.0, inclusive. The rate of parents the fitter of
+    /// which is fitter than the average decreases from it in proportion, to 0.0 for parents that
+    /// include a fittest individual of the population.
+    pub crossover_rate: f64,
 
-    /// The range of the probability of an offspring undergoing mutation.
+    /// The crossover rate of two parents that are both less fit than the average (`k3`).
     ///
     /// # Note
-    /// Both bounds must be between 0.0 and 1.0, inclusive, and the start must not exceed the end.
-    /// The mutation rate moves towards the end of the range as the diversity of the population
-    /// decreases.
-    pub mutation_rate_range: RangeInclusive<f64>,
+    /// `subaverage_crossover_rate` must be between 0.0 and 1.0, inclusive.
+    pub subaverage_crossover_rate: f64,
+
+    /// The mutation rate of a candidate whose fittest parent has the average score (`k2`).
+    ///
+    /// `mutation_rate` must be between 0.0 and 1.0, inclusive. The rate of a candidate whose
+    /// fittest parent is fitter than the average decreases from it in proportion, to 0.0 for a
+    /// candidate of a fittest individual of the population.
+    pub mutation_rate: f64,
+
+    /// The mutation rate of a candidate whose fittest parent is less fit than the average
+    /// (`k4`).
+    ///
+    /// # Note
+    /// `subaverage_mutation_rate` must be between 0.0 and 1.0, inclusive.
+    pub subaverage_mutation_rate: f64,
+
+    /// The mutation rate of every candidate whose rate would otherwise be lower.
+    ///
+    /// `minimum_mutation_rate` must be between 0.0 and 1.0, inclusive. It is the default
+    /// mutation rate of Srinivas and Patnaik.
+    pub minimum_mutation_rate: f64,
 
     /// The strategy for selecting parents from the population.
     pub selection_strategy: SelectionStrategy,
-
-    /// The number of generations between adjustments of the crossover and mutation rates.
-    ///
-    /// # Note
-    /// `parameter_adjustment_interval` must be positive.
-    pub parameter_adjustment_interval: usize,
 }
 
 impl Default for AdaptiveGeneticAlgorithmParameters {
@@ -63,18 +74,22 @@ impl Default for AdaptiveGeneticAlgorithmParameters {
     /// # Default Values
     /// * population_size: 100
     /// * elitism_rate: 0.01
-    /// * crossover_rate_range: 0.3..=1.0
-    /// * mutation_rate_range: 0.1..=1.0
+    /// * crossover_rate: 1.0
+    /// * subaverage_crossover_rate: 1.0
+    /// * mutation_rate: 0.5
+    /// * subaverage_mutation_rate: 0.5
+    /// * minimum_mutation_rate: 0.005
     /// * selection_strategy: [`SelectionStrategy::RouletteWheel`]
-    /// * parameter_adjustment_interval: 1
     fn default() -> Self {
         Self {
             population_size: 100,
             elitism_rate: 0.01,
-            crossover_rate_range: 0.3..=1.0,
-            mutation_rate_range: 0.1..=1.0,
+            crossover_rate: 1.0,
+            subaverage_crossover_rate: 1.0,
+            mutation_rate: 0.5,
+            subaverage_mutation_rate: 0.5,
+            minimum_mutation_rate: 0.005,
             selection_strategy: SelectionStrategy::RouletteWheel,
-            parameter_adjustment_interval: 1,
         }
     }
 }
@@ -93,57 +108,46 @@ impl AdaptiveGeneticAlgorithmParameters {
             ));
         }
         check_ratio("elitism_rate", self.elitism_rate)?;
-        check_probability_range("crossover_rate_range", &self.crossover_rate_range)?;
-        check_probability_range("mutation_rate_range", &self.mutation_rate_range)?;
-        if self.parameter_adjustment_interval == 0 {
-            return Err(EvolutionError::invalid_parameter(
-                "parameter_adjustment_interval",
-                "must be positive",
-            ));
-        }
+        check_probability("crossover_rate", self.crossover_rate)?;
+        check_probability("subaverage_crossover_rate", self.subaverage_crossover_rate)?;
+        check_probability("mutation_rate", self.mutation_rate)?;
+        check_probability("subaverage_mutation_rate", self.subaverage_mutation_rate)?;
+        check_probability("minimum_mutation_rate", self.minimum_mutation_rate)?;
         self.selection_strategy.validate()
     }
 }
 
-fn check_probability_range(
-    name: &'static str,
-    range: &RangeInclusive<f64>,
-) -> Result<(), EvolutionError> {
-    check_probability(name, *range.start())?;
-    check_probability(name, *range.end())?;
-    if range.start() > range.end() {
-        return Err(EvolutionError::invalid_parameter(
-            name,
-            "the start must not exceed the end",
-        ));
-    }
-    Ok(())
-}
-
-/// An adaptive genetic algorithm for evolving populations towards better score values.
+/// The adaptive genetic algorithm of Srinivas and Patnaik, in which each candidate is bred at
+/// rates that depend on the scores of its parents.
 ///
 /// # Note
-/// This algorithm adjusts its crossover and mutation rates to the diversity of the population,
-/// with the goal of balancing exploration and exploitation.
+/// For a candidate whose fitter parent has the score `f`, in a population whose fittest score is
+/// `fmax` and average score is `favg`:
 ///
-/// The diversity is the standard deviation of the scores of the current generation
-/// relative to that of the initial generation, limited to the range 0.0 to 1.0. When the
-/// initial generation has no spread at all, the first spread observed later becomes the
-/// reference. When diversity is high, the algorithm increases the crossover rate and decreases
-/// the mutation rate, which exploits the existing diversity through crossover. When diversity is
-/// low, it decreases the crossover rate and increases the mutation rate, which encourages
-/// exploration by introducing more diversity into the population.
-/// The spread ratio is computed using scaled statistics so it remains usable even when the
-/// standard deviations in the score's units would overflow.
+/// * Its crossover rate is `k1 * (fmax - f) / (fmax - favg)` if `f` is at least as fit as
+///   `favg`, and `k3` otherwise.
+/// * Its mutation rate is `k2 * (fmax - f) / (fmax - favg)` if `f` is at least as fit as `favg`,
+///   and `k4` otherwise, but at least the minimum mutation rate.
 ///
-/// The rates start at the highest crossover rate and the lowest mutation rate, and are adjusted
-/// at the configured interval. The algorithm breeds its offspring by a [`Reproduction`], whose
-/// parent selector and survival policy can be replaced through
-/// [`reproduction_mut`](AdaptiveGeneticAlgorithm::reproduction_mut); the rates the algorithm
-/// sets replace any rates set there.
+/// The constants are the rates of [`AdaptiveGeneticAlgorithmParameters`]. Both rates are 0.0
+/// for the fittest individuals, apart from the minimum mutation rate. If all scores are equal,
+/// crossover is disabled and mutation uses that minimum. For minimization, the distances are
+/// taken towards the lowest score instead.
+///
+/// A candidate that does not cross over is a copy of its first parent. The score that sets its
+/// mutation rate is that of its fittest parent. Each probability applies to the model's operator
+/// once per candidate; it does not prescribe a separate probability for every gene.
+///
+/// The algorithm breeds its offspring by a [`Reproduction`], whose parent selector and survival
+/// policy can be replaced through
+/// [`reproduction_mut`](AdaptiveGeneticAlgorithm::reproduction_mut).
 ///
 /// The algorithm operates on an [`EvolutionModel`], which defines the problem-specific
 /// components such as the crossover and mutation operators, and the score function.
+///
+/// # References
+/// M. Srinivas and L. M. Patnaik, "Adaptive probabilities of crossover and mutation in genetic
+/// algorithms", IEEE Transactions on Systems, Man, and Cybernetics, 24(4), pp. 656-667, 1994.
 ///
 /// # Example
 /// Runs the algorithm on the model of the [OneMax example].
@@ -154,12 +158,13 @@ fn check_probability_range(
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
-/// let mut aga_params = AdaptiveGeneticAlgorithmParameters::default();
-/// aga_params.selection_strategy = SelectionStrategy::Tournament(4);
-/// let mut aga = AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, aga_params)?.into_evolution();
+/// let mut parameters = AdaptiveGeneticAlgorithmParameters::default();
+/// parameters.selection_strategy = SelectionStrategy::Tournament(4);
+/// let mut evolution =
+///     AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, parameters)?.into_evolution();
 ///
 /// let limits = Limits::new().generations(200);
-/// let solution = aga
+/// let solution = evolution
 ///     .run(&ONE_MAX_LENGTH, |state| limits.check(state))?
 ///     .into_fittest_so_far();
 ///
@@ -173,7 +178,6 @@ pub struct AdaptiveGeneticAlgorithm<M: EvolutionModel> {
     parameters: AdaptiveGeneticAlgorithmParameters,
     elite_count: usize,
     reproduction: Reproduction<M::Individual>,
-    reference_spread: Option<Spread>,
 }
 
 impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
@@ -186,17 +190,11 @@ impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
         parameters: AdaptiveGeneticAlgorithmParameters,
     ) -> Result<Self, EvolutionError> {
         parameters.validate()?;
-        let reproduction = Reproduction::from_strategy(
-            parameters.selection_strategy,
-            *parameters.crossover_rate_range.end(),
-            *parameters.mutation_rate_range.start(),
-        )?;
         Ok(Self {
             model,
             elite_count: elite_count(parameters.population_size, parameters.elitism_rate),
+            reproduction: Reproduction::from_strategy(parameters.selection_strategy)?,
             parameters,
-            reproduction,
-            reference_spread: None,
         })
     }
 
@@ -206,8 +204,7 @@ impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
         &self.parameters
     }
 
-    /// Returns the reproduction that breeds the offspring, with the rates of the current
-    /// generation.
+    /// Returns the reproduction that breeds the offspring.
     #[inline]
     pub fn reproduction(&self) -> &Reproduction<M::Individual> {
         &self.reproduction
@@ -218,29 +215,6 @@ impl<M: EvolutionModel> AdaptiveGeneticAlgorithm<M> {
     #[inline]
     pub fn reproduction_mut(&mut self) -> &mut Reproduction<M::Individual> {
         &mut self.reproduction
-    }
-
-    /// Sets the crossover rate to the point of its range given by `crossover_ratio`, and the
-    /// mutation rate to the point of its range given by `mutation_ratio`.
-    fn set_rates(&mut self, crossover_ratio: f64, mutation_ratio: f64) {
-        let rate_in = |range: &RangeInclusive<f64>, ratio| {
-            interpolate_f64(*range.start(), *range.end(), ratio).clamp(*range.start(), *range.end())
-        };
-        let crossover_rate = rate_in(&self.parameters.crossover_rate_range, crossover_ratio);
-        let mutation_rate = rate_in(&self.parameters.mutation_rate_range, mutation_ratio);
-        self.reproduction
-            .set_rates(crossover_rate, mutation_rate)
-            .expect("the rate ranges are validated on creation");
-    }
-
-    /// Returns the diversity of the population, between 0.0 and 1.0, relative to the reference
-    /// standard deviation, which it adopts first if there is none yet.
-    fn diversity(&mut self, population: &Population<M::Individual>) -> f64 {
-        let Some(spread) = population.stats().spread() else {
-            return 0.0;
-        };
-        let reference = self.reference_spread.get_or_insert(spread);
-        spread.ratio(*reference).clamp(0.0, 1.0)
     }
 }
 
@@ -262,17 +236,8 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
         self.model.start_run();
     }
 
+    #[inline]
     fn prepare_generation(&mut self, state: &RunState<M::Individual>) {
-        let population = state.population();
-        let generation = state.generation();
-        if generation == 0 {
-            self.reference_spread = population.stats().spread();
-            self.set_rates(1.0, 0.0);
-        } else if generation % self.parameters.parameter_adjustment_interval == 0 {
-            let diversity = self.diversity(population);
-            self.set_rates(diversity, 1.0 - diversity);
-        }
-
         self.model.prepare(state);
     }
 
@@ -285,14 +250,89 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
         select_fittest(population, self.elite_count, elites);
     }
 
-    #[inline]
     fn generate_offspring(
         &self,
         state: &RunState<M::Individual>,
         offspring: &mut Generation<M::Individual>,
         rng: &mut Rng,
     ) {
+        let rates = FitnessRates::new(&self.parameters, state.population());
         self.reproduction
-            .breed_into(&self.model, state, offspring, rng);
+            .breed_into(&self.model, state, offspring, &rates, rng);
+    }
+}
+
+/// The rates at which the adaptive genetic algorithm breeds the candidates of a population.
+struct FitnessRates {
+    objective: Objective,
+    fittest: f64,
+    average: f64,
+    crossover: f64,
+    subaverage_crossover: f64,
+    mutation: f64,
+    subaverage_mutation: f64,
+    minimum_mutation: f64,
+}
+
+impl FitnessRates {
+    fn new<I: Individual>(
+        parameters: &AdaptiveGeneticAlgorithmParameters,
+        population: &Population<I>,
+    ) -> Self {
+        let stats = population.stats();
+        Self {
+            objective: population.objective(),
+            fittest: population.fittest().score(),
+            // When every score is equal, rounding could put the average apart from them.
+            average: stats.avg().clamp(stats.min(), stats.max()),
+            crossover: parameters.crossover_rate,
+            subaverage_crossover: parameters.subaverage_crossover_rate,
+            mutation: parameters.mutation_rate,
+            subaverage_mutation: parameters.subaverage_mutation_rate,
+            minimum_mutation: parameters.minimum_mutation_rate,
+        }
+    }
+
+    /// Returns the rate of a parent with `score`: `subaverage_rate` if it is less fit than the
+    /// average, and otherwise `rate` scaled by its distance to the fittest score, relative to the
+    /// distance of the average score to it.
+    fn rate(&self, score: f64, rate: f64, subaverage_rate: f64) -> f64 {
+        if !self.objective.is_at_least_as_fit(score, self.average) {
+            return subaverage_rate;
+        }
+        let distance = (self.fittest - score).abs();
+        let average_distance = (self.fittest - self.average).abs();
+        // Scale overflowing differences together, leaving subnormal differences intact.
+        let (distance, average_distance) = if average_distance.is_infinite() {
+            (
+                (self.fittest / 2.0 - score / 2.0).abs(),
+                (self.fittest / 2.0 - self.average / 2.0).abs(),
+            )
+        } else {
+            (distance, average_distance)
+        };
+        if average_distance == 0.0 {
+            // Every score is the fittest one.
+            0.0
+        } else {
+            rate * (distance / average_distance).min(1.0)
+        }
+    }
+}
+
+impl<I: Individual> BreedingRates<I> for FitnessRates {
+    fn crossover_rate(&self, parent1: &I, parent2: &I) -> f64 {
+        let (score1, score2) = (parent1.score(), parent2.score());
+        let fitter = if self.objective.is_fitter(score2, score1) {
+            score2
+        } else {
+            score1
+        };
+        self.rate(fitter, self.crossover, self.subaverage_crossover)
+    }
+
+    fn mutation_rate(&self, parent: &I) -> f64 {
+        self.rate(parent.score(), self.mutation, self.subaverage_mutation)
+            .max(self.minimum_mutation)
     }
 }

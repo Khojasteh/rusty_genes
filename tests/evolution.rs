@@ -194,7 +194,7 @@ fn all_entry_points_and_both_algorithms_stop_at_the_goal() {
     let mut configuration = AdaptiveGeneticAlgorithmParameters::default();
     configuration.population_size = 1;
     configuration.elitism_rate = 0.0;
-    configuration.mutation_rate_range = 1.0..=1.0;
+    configuration.minimum_mutation_rate = 1.0;
     let mut aga = AdaptiveGeneticAlgorithm::new(model, configuration)
         .unwrap()
         .into_evolution();
@@ -314,6 +314,12 @@ impl EvolutionModel for Strengthening {
     }
 }
 
+impl DiversityModel for Strengthening {
+    fn diversity(&self, population: &Population<BitGenome>) -> f64 {
+        self.bits.diversity(population)
+    }
+}
+
 /// Asserts that two seeded runs of `algorithm` from the same individual mutate its starting
 /// copies at the strength of a new run, and end with the same population.
 fn assert_runs_start_afresh<A: EvolutionAlgorithm<Model = Strengthening>>(algorithm: A) {
@@ -342,5 +348,8 @@ fn every_run_resets_the_algorithm_and_model_before_creating_its_starting_individ
     );
     assert_runs_start_afresh(
         AdaptiveGeneticAlgorithm::new(Strengthening::new(), Default::default()).unwrap(),
+    );
+    assert_runs_start_afresh(
+        DiversityGuidedGeneticAlgorithm::new(Strengthening::new(), Default::default()).unwrap(),
     );
 }

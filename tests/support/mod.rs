@@ -66,6 +66,17 @@ impl WeightedBits {
     }
 }
 
+/// Measures how far the genomes lie from their average point, taking each bit as a coordinate.
+impl DiversityModel for WeightedBits {
+    fn diversity(&self, population: &Population<BitGenome>) -> f64 {
+        let length = population[0].genes.len();
+        let bits = population
+            .iter()
+            .map(|individual| individual.genes.iter().map(|&bit| f64::from(u8::from(bit))));
+        distance_to_average_point(bits, (length as f64).sqrt())
+    }
+}
+
 impl EvolutionModel for WeightedBits {
     type Individual = BitGenome;
     fn objective(&self) -> Objective {

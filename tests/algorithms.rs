@@ -1,5 +1,7 @@
 #[path = "algorithms/aga.rs"]
 mod aga;
+#[path = "algorithms/dgga.rs"]
+mod dgga;
 #[path = "algorithms/ga.rs"]
 mod ga;
 mod support;
@@ -20,10 +22,11 @@ fn algorithms_and_runs_are_send() {
     fn assert_send<T: Send>() {}
     assert_send::<Evolution<GeneticAlgorithm<WeightedBits>>>();
     assert_send::<Evolution<AdaptiveGeneticAlgorithm<WeightedBits>>>();
+    assert_send::<Evolution<DiversityGuidedGeneticAlgorithm<WeightedBits>>>();
 }
 
 #[test]
-fn a_single_candidate_can_evolve_in_both_algorithms() {
+fn a_single_candidate_can_evolve_in_every_algorithm() {
     let model = || WeightedBits::new(vec![1.0], Objective::Maximize);
     let mut ga = GeneticAlgorithm::new(model(), parameters(1, 0.0))
         .unwrap()
@@ -31,8 +34,16 @@ fn a_single_candidate_can_evolve_in_both_algorithms() {
     let mut adaptive = AdaptiveGeneticAlgorithmParameters::default();
     adaptive.population_size = 1;
     adaptive.elitism_rate = 0.0;
-    adaptive.mutation_rate_range = 1.0..=1.0;
+    adaptive.minimum_mutation_rate = 1.0;
     let mut aga = AdaptiveGeneticAlgorithm::new(model(), adaptive)
+        .unwrap()
+        .into_evolution();
+    // A single individual has no diversity, so the diversity-guided algorithm explores by
+    // mutation.
+    let mut guided = DiversityGuidedGeneticAlgorithmParameters::default();
+    guided.population_size = 1;
+    guided.elitism_rate = 0.0;
+    let mut dgga = DiversityGuidedGeneticAlgorithm::new(model(), guided)
         .unwrap()
         .into_evolution();
     let limits = Limits::new().generations(3);
@@ -42,7 +53,10 @@ fn a_single_candidate_can_evolve_in_both_algorithms() {
     let aga_result = aga
         .evolve_population(vec![BitGenome::from(vec![false])], |s| limits.check(s))
         .unwrap();
-    for outcome in [ga_result, aga_result] {
+    let dgga_result = dgga
+        .evolve_population(vec![BitGenome::from(vec![false])], |s| limits.check(s))
+        .unwrap();
+    for outcome in [ga_result, aga_result, dgga_result] {
         let state = outcome.state();
         assert_eq!(state.generation(), 3);
         assert_eq!(state.population().len(), 1);
@@ -78,6 +92,20 @@ fn invalid_parameters_and_invalid_initial_genomes_are_rejected() {
             Err(EvolutionError::InvalidParameter { name, .. }) if name == expected
         ));
     }
+    fn invalid_dgga(
+        expected: &str,
+        invalidate: impl FnOnce(&mut DiversityGuidedGeneticAlgorithmParameters),
+    ) {
+        let mut configuration = DiversityGuidedGeneticAlgorithmParameters::default();
+        invalidate(&mut configuration);
+        assert!(matches!(
+            DiversityGuidedGeneticAlgorithm::new(
+                WeightedBits::new(vec![1.0], Objective::Maximize),
+                configuration
+            ),
+            Err(EvolutionError::InvalidParameter { name, .. }) if name == expected
+        ));
+    }
     invalid_ga("population_size", |p| p.population_size = 0);
     invalid_ga("elitism_rate", |p| p.elitism_rate = 1.0);
     invalid_ga("crossover_rate", |p| p.crossover_rate = 1.5);
@@ -85,12 +113,32 @@ fn invalid_parameters_and_invalid_initial_genomes_are_rejected() {
     invalid_ga("tournament size", |p| {
         p.selection_strategy = SelectionStrategy::Tournament(0)
     });
-    invalid_aga("crossover_rate_range", |p| {
-        p.crossover_rate_range = 0.9..=0.3
+    invalid_aga("population_size", |p| p.population_size = 0);
+    invalid_aga("elitism_rate", |p| p.elitism_rate = -0.1);
+    invalid_aga("crossover_rate", |p| p.crossover_rate = 1.5);
+    invalid_aga("subaverage_crossover_rate", |p| {
+        p.subaverage_crossover_rate = -0.5
     });
-    invalid_aga("mutation_rate_range", |p| p.mutation_rate_range = 0.1..=1.1);
-    invalid_aga("parameter_adjustment_interval", |p| {
-        p.parameter_adjustment_interval = 0
+    invalid_aga("mutation_rate", |p| p.mutation_rate = f64::NAN);
+    invalid_aga("subaverage_mutation_rate", |p| {
+        p.subaverage_mutation_rate = 2.0
+    });
+    invalid_aga("minimum_mutation_rate", |p| {
+        p.minimum_mutation_rate = -0.005
+    });
+    invalid_aga("tournament size", |p| {
+        p.selection_strategy = SelectionStrategy::Tournament(0)
+    });
+    invalid_dgga("population_size", |p| p.population_size = 0);
+    invalid_dgga("elitism_rate", |p| p.elitism_rate = 1.0);
+    invalid_dgga("low_diversity", |p| p.low_diversity = -0.1);
+    invalid_dgga("high_diversity", |p| p.high_diversity = 1.5);
+    invalid_dgga("low_diversity", |p| {
+        p.low_diversity = 0.5;
+        p.high_diversity = 0.25;
+    });
+    invalid_dgga("tournament size", |p| {
+        p.selection_strategy = SelectionStrategy::Tournament(0)
     });
     let mut evolution = GeneticAlgorithm::new(
         WeightedBits::new(vec![1.0], Objective::Maximize),

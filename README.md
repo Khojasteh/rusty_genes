@@ -11,9 +11,11 @@ that suit your problem, and you can replace any step of an algorithm with your o
 
 ## Features
 
-- **Algorithms:** a standard genetic algorithm, and an adaptive genetic algorithm that adjusts
-  its crossover and mutation rates to the diversity of the population. Runs stop automatically
-  when the model's goal score is reached.
+- **Algorithms:** a standard genetic algorithm; the adaptive genetic algorithm of Srinivas and
+  Patnaik, which breeds each candidate at crossover and mutation rates that depend on the scores
+  of its parents; and the diversity-guided genetic algorithm of Ursem, which alternates between
+  crossover and mutation as the genetic diversity of the population, which the model measures,
+  falls and rises. Runs stop automatically when the model's goal score is reached.
 - **Selection:** tournament, roulette wheel, Boltzmann, rank, linear, and elitist.
 - **Crossover:** common partition, successor, edge recombination (ERX), partially mapped (PMX),
   order (OX), cycle (CX), and single-point (SPX). Through

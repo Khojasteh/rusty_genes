@@ -299,19 +299,6 @@ pub struct PopulatedStats {
     stats: Stats,
 }
 
-/// A standard deviation represented without restoring units that might overflow `f64`.
-#[derive(Clone, Copy)]
-pub(crate) struct Spread {
-    scaled_std: f64,
-    scale: f64,
-}
-
-impl Spread {
-    pub(crate) fn ratio(self, reference: Self) -> f64 {
-        (self.scaled_std / reference.scaled_std) * (self.scale / reference.scale)
-    }
-}
-
 impl PopulatedStats {
     /// Summarizes the finite scores of `items`, which are sorted by score in ascending or
     /// descending order, in two passes over them.
@@ -351,14 +338,6 @@ impl PopulatedStats {
                 scaled_m2,
                 scale,
             },
-        })
-    }
-
-    pub(crate) fn spread(&self) -> Option<Spread> {
-        let variance = self.stats.scaled_variance();
-        (variance > 0.0).then(|| Spread {
-            scaled_std: variance.sqrt(),
-            scale: self.stats.scale,
         })
     }
 

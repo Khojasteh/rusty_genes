@@ -7,66 +7,41 @@ use rayon::prelude::*;
 ///
 /// # Note
 /// Each candidate is bred as follows:
-/// 1. A parent is selected and, with the probability of the crossover rate, a second parent is
-///    selected among the other individuals by [`Sampler::select_other`] to cross over with.
-///    Otherwise, and in a population of a single individual, the candidate is a copy of the
-///    first parent.
-/// 2. With the probability of the mutation rate, the candidate is mutated.
+/// 1. Two parents are selected, the second among the other individuals by
+///    [`Sampler::select_other`]. With the probability of their
+///    [crossover rate](BreedingRates::crossover_rate), the candidate is bred by crossing them
+///    over. Otherwise, and in a population of a single individual, the candidate is a copy of
+///    the first parent.
+/// 2. With the probability of its [mutation rate](BreedingRates::mutation_rate), the candidate
+///    is mutated.
 /// 3. The candidate is improved and evaluated.
 ///
-/// A new reproduction uses the [`FamilyCompetition`] survival policy.
+/// The algorithm breeding with the reproduction gives it the rates. A new reproduction uses the
+/// [`FamilyCompetition`] survival policy.
 pub struct Reproduction<I: Individual> {
     selector: Box<dyn SelectionMechanism<I>>,
     survival: Box<dyn SurvivalPolicy<I>>,
-    crossover_rate: f64,
-    mutation_rate: f64,
 }
 
 impl<I: Individual> Reproduction<I> {
     /// Creates a reproduction that selects parents by `selector`.
-    ///
-    /// # Arguments
-    /// * `selector` - The mechanism that selects parents.
-    /// * `crossover_rate` - The probability of a candidate having two parents, in a population
-    ///   of more than one individual.
-    /// * `mutation_rate` - The probability of a candidate being mutated.
-    ///
-    /// # Errors
-    /// Returns [`EvolutionError::InvalidParameter`] unless both rates are between 0.0 and 1.0,
-    /// inclusive.
-    pub fn new(
-        selector: impl SelectionMechanism<I> + 'static,
-        crossover_rate: f64,
-        mutation_rate: f64,
-    ) -> Result<Self, EvolutionError> {
-        Self::with_boxed_selector(Box::new(selector), crossover_rate, mutation_rate)
+    pub fn new(selector: impl SelectionMechanism<I> + 'static) -> Self {
+        Self::with_boxed_selector(Box::new(selector))
     }
 
     /// Creates a reproduction that selects parents by the mechanism of `strategy`.
     ///
     /// # Errors
-    /// Returns [`EvolutionError::InvalidParameter`] if a parameter of the strategy is invalid, or
-    /// unless both rates are between 0.0 and 1.0, inclusive.
-    pub fn from_strategy(
-        strategy: SelectionStrategy,
-        crossover_rate: f64,
-        mutation_rate: f64,
-    ) -> Result<Self, EvolutionError> {
-        Self::with_boxed_selector(strategy.create_selector()?, crossover_rate, mutation_rate)
+    /// Returns [`EvolutionError::InvalidParameter`] if a parameter of the strategy is invalid.
+    pub fn from_strategy(strategy: SelectionStrategy) -> Result<Self, EvolutionError> {
+        Ok(Self::with_boxed_selector(strategy.create_selector()?))
     }
 
-    fn with_boxed_selector(
-        selector: Box<dyn SelectionMechanism<I>>,
-        crossover_rate: f64,
-        mutation_rate: f64,
-    ) -> Result<Self, EvolutionError> {
-        check_rates(crossover_rate, mutation_rate)?;
-        Ok(Self {
+    fn with_boxed_selector(selector: Box<dyn SelectionMechanism<I>>) -> Self {
+        Self {
             selector,
             survival: Box::new(FamilyCompetition),
-            crossover_rate,
-            mutation_rate,
-        })
+        }
     }
 
     /// Replaces the survival policy, and returns the reproduction.
@@ -85,35 +60,6 @@ impl<I: Individual> Reproduction<I> {
         self.survival = Box::new(survival);
     }
 
-    /// Returns the probability of a candidate having two parents, in a population of more than
-    /// one individual.
-    #[inline]
-    pub fn crossover_rate(&self) -> f64 {
-        self.crossover_rate
-    }
-
-    /// Returns the probability of a candidate being mutated.
-    #[inline]
-    pub fn mutation_rate(&self) -> f64 {
-        self.mutation_rate
-    }
-
-    /// Sets the crossover and mutation rates.
-    ///
-    /// # Errors
-    /// Returns [`EvolutionError::InvalidParameter`] unless both rates are between 0.0 and 1.0,
-    /// inclusive. In that case, the rates are left unchanged.
-    pub fn set_rates(
-        &mut self,
-        crossover_rate: f64,
-        mutation_rate: f64,
-    ) -> Result<(), EvolutionError> {
-        check_rates(crossover_rate, mutation_rate)?;
-        self.crossover_rate = crossover_rate;
-        self.mutation_rate = mutation_rate;
-        Ok(())
-    }
-
     /// Returns the mechanism that selects parents.
     #[inline]
     pub fn selector(&self) -> &dyn SelectionMechanism<I> {
@@ -122,11 +68,9 @@ impl<I: Individual> Reproduction<I> {
 
     /// Breeds and evaluates one candidate, recording its parents' indices in the population.
     ///
-    /// # Arguments
-    /// * `model` - The model whose operators create, vary, and evaluate the candidate.
-    /// * `parents` - The sampler of the parent selector for the population to breed from, as
-    ///   created by [`SelectionMechanism::sampler`].
-    /// * `rng` - A mutable reference to a random number generator.
+    /// `parents` is a sampler created by [`SelectionMechanism::sampler`] for the population
+    /// to breed from. `rates` supplies probabilities based on the selected parents; `model`
+    /// supplies crossover, mutation, local search, and evaluation.
     ///
     /// The returned candidate may be invalid. This method applies no survival policy; its
     /// caller decides whether the candidate or a parent joins the next generation.
@@ -134,6 +78,7 @@ impl<I: Individual> Reproduction<I> {
         &self,
         model: &M,
         parents: &dyn Sampler<'a, I>,
+        rates: &(impl BreedingRates<I> + ?Sized),
         rng: &mut Rng,
     ) -> Candidate<I>
     where
@@ -142,11 +87,9 @@ impl<I: Individual> Reproduction<I> {
     {
         let population = parents.population();
         let (first, parent1) = parents.select(rng);
-        let second = if population.len() > 1 && rng.random_bool(self.crossover_rate) {
-            parents.select_other(rng, first)
-        } else {
-            None
-        };
+        let second = parents
+            .select_other(rng, first)
+            .filter(|(_, parent2)| rng.random_bool(rates.crossover_rate(parent1, parent2)));
 
         let (mut individual, fittest_parent, other_parent) = match second {
             Some((second, parent2)) => {
@@ -163,7 +106,7 @@ impl<I: Individual> Reproduction<I> {
             None => (parent1.clone(), first, None),
         };
 
-        if rng.random_bool(self.mutation_rate) {
+        if rng.random_bool(rates.mutation_rate(&population[fittest_parent])) {
             model.mutate(&mut individual, rng);
         }
 
@@ -177,17 +120,12 @@ impl<I: Individual> Reproduction<I> {
         }
     }
 
-    /// Breeds candidates in parallel, then lets the survival policy fill `next`.
+    /// Breeds candidates from the population of `state` in parallel, then lets the survival
+    /// policy fill `next`.
     ///
-    /// # Arguments
-    /// * `model` - The model whose operators create, vary, and evaluate the candidates.
-    /// * `state` - The state of the run, whose population parents are selected from by a
-    ///   sampler the selector creates for its generation.
-    /// * `next` - The next generation, which may already hold its elites.
-    /// * `rng` - A mutable reference to a random number generator.
-    ///
-    /// # Note
-    /// As many candidates are bred as `next` lacks individuals to its
+    /// The parents are selected by a sampler that the selector creates for the population and
+    /// the [generation](RunState::generation) of `state`.
+    /// `next` may already hold elites. As many candidates are bred as it lacks individuals to its
     /// [size](Generation::size), and the survival policy chooses the rest of the next
     /// generation from the population and the candidates. A generation holds only valid and
     /// distinct individuals, so `next` stays smaller than its size when the policy finds no more
@@ -196,12 +134,14 @@ impl<I: Individual> Reproduction<I> {
     /// The candidates are bred in parallel, each with its own generator of [`Rng::split`], and
     /// the survival policy receives them in the order of those generators, with a generator of
     /// its own. The result therefore depends only on the state of `rng`, not on how the work is
-    /// scheduled on threads, as long as the policy depends only on what it receives.
+    /// scheduled on threads, as long as the rates and the policy depend only on what they
+    /// receive, and the model uses only the supplied generators for its random choices.
     pub fn breed_into<M>(
         &self,
         model: &M,
         state: &RunState<I>,
         next: &mut Generation<I>,
+        rates: &(impl BreedingRates<I> + Sync + ?Sized),
         rng: &mut Rng,
     ) where
         M: EvolutionModel<Individual = I> + ?Sized,
@@ -212,7 +152,7 @@ impl<I: Individual> Reproduction<I> {
         let streams = rng.split();
         let candidates = (0..count)
             .into_par_iter()
-            .map(|index| self.breed(model, &*parents, &mut streams.rng(index as u64)))
+            .map(|index| self.breed(model, &*parents, rates, &mut streams.rng(index as u64)))
             .collect();
         self.survival.select_survivors(
             population,
@@ -220,6 +160,88 @@ impl<I: Individual> Reproduction<I> {
             next,
             &mut streams.rng(count as u64),
         );
+    }
+}
+
+/// The probabilities at which a [`Reproduction`] breeds each candidate by crossover, and mutates
+/// it.
+///
+/// An algorithm decides the rates and gives them to the reproduction for each breeding. The
+/// rates may depend on the parents of a candidate, such as the rates of the
+/// [`AdaptiveGeneticAlgorithm`], or be the same for every candidate, as [`FixedRates`] are.
+/// A rate is a probability between 0.0 and 1.0.
+pub trait BreedingRates<I: Individual> {
+    /// Returns the probability of breeding a candidate by crossing over `parent1` and `parent2`,
+    /// rather than copying `parent1`.
+    fn crossover_rate(&self, parent1: &I, parent2: &I) -> f64;
+
+    /// Returns the probability of mutating a candidate whose fittest parent is `parent`: the
+    /// parent it is a copy of, or the fitter of the two parents it was crossed over from.
+    fn mutation_rate(&self, parent: &I) -> f64;
+}
+
+/// The same crossover and mutation rates for every candidate.
+///
+/// # Example
+/// ```
+/// use rusty_genes::*;
+///
+/// let rates = FixedRates::new(0.8, 0.1)?;
+/// assert_eq!((rates.crossover(), rates.mutation()), (0.8, 0.1));
+/// assert!(FixedRates::new(1.5, 0.1).is_err());
+/// # Ok::<(), EvolutionError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FixedRates {
+    crossover: f64,
+    mutation: f64,
+}
+
+impl FixedRates {
+    /// Sets the probabilities of crossover and mutation for every candidate.
+    ///
+    /// Crossover requires at least two individuals. Mutation can apply to either a crossed-over
+    /// candidate or a copied parent, independently of whether crossover occurred.
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::InvalidParameter`] unless both rates are between 0.0 and 1.0,
+    /// inclusive.
+    pub fn new(crossover: f64, mutation: f64) -> Result<Self, EvolutionError> {
+        check_probability("crossover_rate", crossover)?;
+        check_probability("mutation_rate", mutation)?;
+        Ok(Self::constant(crossover, mutation))
+    }
+
+    /// Creates rates that are known to be valid.
+    pub(crate) const fn constant(crossover: f64, mutation: f64) -> Self {
+        Self {
+            crossover,
+            mutation,
+        }
+    }
+
+    /// Returns the probability of a candidate being bred by crossover from two parents.
+    #[inline]
+    pub fn crossover(&self) -> f64 {
+        self.crossover
+    }
+
+    /// Returns the probability of a candidate being mutated.
+    #[inline]
+    pub fn mutation(&self) -> f64 {
+        self.mutation
+    }
+}
+
+impl<I: Individual> BreedingRates<I> for FixedRates {
+    #[inline]
+    fn crossover_rate(&self, _: &I, _: &I) -> f64 {
+        self.crossover
+    }
+
+    #[inline]
+    fn mutation_rate(&self, _: &I) -> f64 {
+        self.mutation
     }
 }
 
@@ -282,9 +304,4 @@ impl<I: Individual> Candidate<I> {
     pub fn into_individual(self) -> I {
         self.individual
     }
-}
-
-fn check_rates(crossover_rate: f64, mutation_rate: f64) -> Result<(), EvolutionError> {
-    check_probability("crossover_rate", crossover_rate)?;
-    check_probability("mutation_rate", mutation_rate)
 }

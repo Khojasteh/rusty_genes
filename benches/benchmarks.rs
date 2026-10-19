@@ -4,7 +4,7 @@
 mod one_max;
 
 use criterion::{
-    BatchSize, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
+    BatchSize, Bencher, BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main,
     measurement::*,
 };
 use one_max::*;
@@ -13,6 +13,21 @@ use std::{
     hash::{Hash, Hasher},
     hint::black_box,
 };
+
+/// Measures the diversity of the OneMax genomes for the diversity-guided algorithm, taking each
+/// bit as a coordinate between 0 and 1.
+impl DiversityModel for OneMaxEvolutionModel {
+    fn diversity(&self, population: &Population<OneMax>) -> f64 {
+        let length = population[0].genome().len();
+        let bits = population.iter().map(|individual| {
+            individual
+                .genome()
+                .iter()
+                .map(|&bit| f64::from(u8::from(bit)))
+        });
+        distance_to_average_point(bits, (length as f64).sqrt())
+    }
+}
 
 pub fn benchmark_crossover_strategies<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
@@ -361,7 +376,8 @@ pub fn benchmark_population<M: Measurement>(
 }
 
 /// Measures the steps of a generation that the model and the algorithm provide by default, on
-/// the OneMax problem.
+/// the OneMax problem: those of the standard genetic algorithm, the survival policies, and the
+/// steps in which the adaptive and diversity-guided algorithms differ from it.
 pub fn benchmark_generation_steps<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     genome_length: usize,
@@ -397,23 +413,102 @@ pub fn benchmark_generation_steps<M: Measurement>(
     group.bench_function("breed", |b| {
         let mut rng = Rng::from_seed(0);
         let reproduction = ga.reproduction();
+        let rates = ga.rates();
         let parents = reproduction.selector().sampler(population, 0);
         b.iter(|| {
             for _ in 0..population_size {
-                black_box(reproduction.breed(&model, &*parents, &mut rng));
+                black_box(reproduction.breed(&model, &*parents, rates, &mut rng));
             }
         });
     });
 
-    // A full generation, bred in parallel and chosen by the survival policy.
     group.bench_function("generate_offspring", |b| {
-        let mut rng = Rng::from_seed(0);
-        b.iter_batched_ref(
-            || Generation::new(population_size),
-            |offspring| ga.generate_offspring(&state, offspring, &mut rng),
-            BatchSize::SmallInput,
-        );
+        bench_generate_offspring(b, &ga, &state)
     });
+
+    // Each policy chooses the next generation from the population and one candidate per
+    // individual.
+    let candidates = {
+        let mut rng = Rng::from_seed(0);
+        let reproduction = ga.reproduction();
+        let parents = reproduction.selector().sampler(population, 0);
+        (0..population_size)
+            .map(|_| reproduction.breed(&model, &*parents, ga.rates(), &mut rng))
+            .collect::<Vec<_>>()
+    };
+    let policies: [(&str, &dyn SurvivalPolicy<OneMax>); 3] = [
+        ("FamilyCompetition", &FamilyCompetition),
+        ("PlaceCompetition", &PlaceCompetition),
+        ("Generational", &Generational),
+    ];
+    for (name, policy) in policies {
+        group.bench_function(format!("select_survivors ({name})"), |b| {
+            let mut rng = Rng::from_seed(0);
+            b.iter_batched(
+                || (candidates.clone(), Generation::new(population_size)),
+                |(candidates, mut next)| {
+                    policy.select_survivors(population, candidates, &mut next, &mut rng);
+                    next
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+
+    let mut parameters = AdaptiveGeneticAlgorithmParameters::default();
+    parameters.population_size = population_size;
+    let mut aga = AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, parameters).unwrap();
+    aga.prepare_generation(&state);
+
+    group.bench_function("generate_offspring (AGA)", |b| {
+        bench_generate_offspring(b, &aga, &state)
+    });
+
+    // The diversity of the population decides whether the algorithm exploits or explores. A low
+    // threshold of 1.0 makes it explore any population.
+    let dgga = |low_diversity: f64| {
+        let mut parameters = DiversityGuidedGeneticAlgorithmParameters::default();
+        parameters.population_size = population_size;
+        parameters.low_diversity = low_diversity;
+        parameters.high_diversity = parameters.high_diversity.max(low_diversity);
+        let mut dgga =
+            DiversityGuidedGeneticAlgorithm::new(OneMaxEvolutionModel, parameters).unwrap();
+        dgga.prepare_generation(&state);
+        dgga
+    };
+    let mut exploiting = dgga(DiversityGuidedGeneticAlgorithmParameters::default().low_diversity);
+    let exploring = dgga(1.0);
+    assert!(!exploiting.is_exploring() && exploring.is_exploring());
+
+    group.bench_function("prepare_generation (DGGA)", |b| {
+        b.iter(|| {
+            exploiting.prepare_generation(black_box(&state));
+            exploiting.is_exploring()
+        });
+    });
+
+    group.bench_function("generate_offspring (DGGA exploiting)", |b| {
+        bench_generate_offspring(b, &exploiting, &state)
+    });
+
+    group.bench_function("generate_offspring (DGGA exploring)", |b| {
+        bench_generate_offspring(b, &exploring, &state)
+    });
+}
+
+/// Measures breeding a full generation of the population of `state` by `algorithm`, in
+/// parallel, and choosing it by the survival policy.
+fn bench_generate_offspring<A: EvolutionAlgorithm, M: Measurement>(
+    b: &mut Bencher<'_, M>,
+    algorithm: &A,
+    state: &RunState<IndividualOf<A>>,
+) {
+    let mut rng = Rng::from_seed(0);
+    b.iter_batched_ref(
+        || Generation::new(algorithm.population_size()),
+        |offspring| algorithm.generate_offspring(state, offspring, &mut rng),
+        BatchSize::SmallInput,
+    );
 }
 
 /// Measures complete runs of the evolutionary algorithms on the OneMax problem, from the same
@@ -455,6 +550,29 @@ pub fn benchmark_evolution<M: Measurement>(
             .unwrap()
             .into_evolution()
             .with_seed(0);
+        b.iter_batched(
+            || initial_population.clone(),
+            |individuals| evolution.evolve_population(individuals, |state| limits.check(state)),
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("DGGA", |b| {
+        let mut parameters = DiversityGuidedGeneticAlgorithmParameters::default();
+        parameters.population_size = population_size;
+        // The diversity of the run falls from about 0.5 while it exploits, so it switches to
+        // exploring about halfway through.
+        parameters.low_diversity = 0.35;
+        parameters.high_diversity = 0.4;
+        let mut evolution = DiversityGuidedGeneticAlgorithm::new(OneMaxEvolutionModel, parameters)
+            .unwrap()
+            .into_evolution()
+            .with_seed(0);
+        // Every run starts by exploiting, so a run that ends exploring has been through both.
+        evolution
+            .evolve_population(initial_population.clone(), |state| limits.check(state))
+            .unwrap();
+        assert!(evolution.algorithm().is_exploring());
         b.iter_batched(
             || initial_population.clone(),
             |individuals| evolution.evolve_population(individuals, |state| limits.check(state)),

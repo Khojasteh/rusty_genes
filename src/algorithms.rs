@@ -7,6 +7,9 @@ pub use ga::*;
 mod aga;
 pub use aga::*;
 
+mod dgga;
+pub use dgga::*;
+
 /// The type of individual evolved by an evolutionary algorithm `A`.
 pub type IndividualOf<A> = <<A as EvolutionAlgorithm>::Model as EvolutionModel>::Individual;
 

@@ -95,9 +95,9 @@ impl GeneticAlgorithmParameters {
 /// The algorithm breeds its offspring by a [`Reproduction`], whose parent selector and survival
 /// policy can be replaced through [`reproduction_mut`](GeneticAlgorithm::reproduction_mut).
 ///
-/// While the `GeneticAlgorithm` can be effective in solving optimization problems, the
-/// [`AdaptiveGeneticAlgorithm`], which adjusts its rates to the diversity of the population,
-/// may be better suited to problems with varying search landscapes.
+/// For rates that depend on each candidate's parents, see [`AdaptiveGeneticAlgorithm`]. For
+/// switching between crossover and mutation according to genome diversity, see
+/// [`DiversityGuidedGeneticAlgorithm`].
 ///
 /// # Example
 /// Runs the algorithm on the model of the [OneMax example].
@@ -128,6 +128,7 @@ pub struct GeneticAlgorithm<M: EvolutionModel> {
     model: M,
     parameters: GeneticAlgorithmParameters,
     elite_count: usize,
+    rates: FixedRates,
     reproduction: Reproduction<M::Individual>,
 }
 
@@ -138,16 +139,12 @@ impl<M: EvolutionModel> GeneticAlgorithm<M> {
     /// Returns [`EvolutionError::InvalidParameter`] if a parameter is invalid.
     pub fn new(model: M, parameters: GeneticAlgorithmParameters) -> Result<Self, EvolutionError> {
         parameters.validate()?;
-        let reproduction = Reproduction::from_strategy(
-            parameters.selection_strategy,
-            parameters.crossover_rate,
-            parameters.mutation_rate,
-        )?;
         Ok(Self {
             model,
             elite_count: elite_count(parameters.population_size, parameters.elitism_rate),
+            rates: FixedRates::new(parameters.crossover_rate, parameters.mutation_rate)?,
+            reproduction: Reproduction::from_strategy(parameters.selection_strategy)?,
             parameters,
-            reproduction,
         })
     }
 
@@ -157,6 +154,12 @@ impl<M: EvolutionModel> GeneticAlgorithm<M> {
         &self.parameters
     }
 
+    /// Returns the rates at which the offspring are bred, which are those of the parameters.
+    #[inline]
+    pub fn rates(&self) -> &FixedRates {
+        &self.rates
+    }
+
     /// Returns the reproduction that breeds the offspring.
     #[inline]
     pub fn reproduction(&self) -> &Reproduction<M::Individual> {
@@ -164,7 +167,7 @@ impl<M: EvolutionModel> GeneticAlgorithm<M> {
     }
 
     /// Returns the reproduction that breeds the offspring, to replace its parent selector or
-    /// survival policy, or to change its rates.
+    /// survival policy.
     #[inline]
     pub fn reproduction_mut(&mut self) -> &mut Reproduction<M::Individual> {
         &mut self.reproduction
@@ -211,6 +214,6 @@ impl<M: EvolutionModel> EvolutionAlgorithm for GeneticAlgorithm<M> {
         rng: &mut Rng,
     ) {
         self.reproduction
-            .breed_into(&self.model, state, offspring, rng);
+            .breed_into(&self.model, state, offspring, &self.rates, rng);
     }
 }

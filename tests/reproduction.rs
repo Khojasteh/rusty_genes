@@ -24,7 +24,7 @@ impl<'a> Sampler<'a, BitGenome> for FixedSampler<'a> {
     }
     fn select_other(&self, _: &mut Rng, _: usize) -> Option<(usize, &'a BitGenome)> {
         let i = 1 - self.0;
-        Some((i, &self.1[i]))
+        (self.1.len() > 1).then(|| (i, &self.1[i]))
     }
 }
 
@@ -67,9 +67,10 @@ fn breeding_returns_the_candidate_and_its_parents() {
     // A copy of the parent is mutated even when that makes it less fit.
     let model = WeightedBits::new(vec![1.0], Objective::Maximize);
     let population = Population::new(vec![model.individual(&[true])]).unwrap();
-    let reproduction = Reproduction::new(FixedParents(0), 0.0, 1.0).unwrap();
+    let rates = FixedRates::new(0.0, 1.0).unwrap();
+    let reproduction = Reproduction::new(FixedParents(0));
     let parents = reproduction.selector().sampler(&population, 0);
-    let candidate = reproduction.breed(&model, &*parents, &mut Rng::from_seed(0));
+    let candidate = reproduction.breed(&model, &*parents, &rates, &mut Rng::from_seed(0));
     assert_eq!(candidate.individual().genes, vec![false]);
     assert_eq!(candidate.individual().score(), 0.0);
     assert_eq!(
@@ -85,9 +86,10 @@ fn breeding_returns_the_candidate_and_its_parents() {
         model.individual(&[false, true]),
     ])
     .unwrap();
-    let reproduction = Reproduction::new(FixedParents(0), 1.0, 0.0).unwrap();
+    let rates = FixedRates::new(1.0, 0.0).unwrap();
+    let reproduction = Reproduction::new(FixedParents(0));
     let parents = reproduction.selector().sampler(&population, 0);
-    let candidate = reproduction.breed(&model, &*parents, &mut Rng::from_seed(0));
+    let candidate = reproduction.breed(&model, &*parents, &rates, &mut Rng::from_seed(0));
     assert_eq!(candidate.individual().genes, vec![true, true]);
     assert_eq!(candidate.individual().score(), 3.0);
     assert_eq!(
@@ -110,11 +112,12 @@ fn candidates_have_two_parents_even_when_only_the_fittest_can_be_selected() {
     ] {
         let model = WeightedBits::new(weights, Objective::Maximize);
         let population = one_hot_population(&model, 10);
-        let reproduction = Reproduction::from_strategy(strategy, 1.0, 0.0).unwrap();
+        let rates = FixedRates::new(1.0, 0.0).unwrap();
+        let reproduction = Reproduction::from_strategy(strategy).unwrap();
         let parents = reproduction.selector().sampler(&population, 0);
         let mut rng = Rng::from_seed(0);
         for _ in 0..100 {
-            let candidate = reproduction.breed(&model, &*parents, &mut rng);
+            let candidate = reproduction.breed(&model, &*parents, &rates, &mut rng);
             assert_eq!(candidate.fittest_parent(), 9, "{strategy:?}");
             assert!(
                 candidate.other_parent().is_some_and(|other| other != 9),
@@ -143,7 +146,8 @@ fn survival_compares_evaluated_genomes_using_the_population_objective() {
         let population =
             Population::with_objective(vec![model.individual(&[initial])], objective).unwrap();
         // The candidate flips the only bit of its parent, which makes it less fit.
-        let mut reproduction = Reproduction::new(FixedParents(0), 0.0, 1.0).unwrap();
+        let rates = FixedRates::new(0.0, 1.0).unwrap();
+        let mut reproduction = Reproduction::new(FixedParents(0));
         for ((policy, set_survival), survivor) in
             policies().into_iter().zip([initial, initial, !initial])
         {
@@ -153,6 +157,7 @@ fn survival_compares_evaluated_genomes_using_the_population_objective() {
                 &model,
                 &run_state(&population),
                 &mut next,
+                &rates,
                 &mut Rng::from_seed(0),
             );
             assert_eq!(sorted_genomes(&next), [vec![survivor]], "{policy}");
@@ -175,7 +180,8 @@ fn invalid_candidates_leave_the_population_in_place() {
         // A changed constraint rejects every candidate with the old genome length.
         let changed_problem = WeightedBits::new(vec![1.0, 2.0, 3.0], objective);
         for first in [0, 1] {
-            let mut reproduction = Reproduction::new(FixedParents(first), 1.0, 0.0).unwrap();
+            let rates = FixedRates::new(1.0, 0.0).unwrap();
+            let mut reproduction = Reproduction::new(FixedParents(first));
             for (policy, set_survival) in policies() {
                 set_survival(&mut reproduction);
                 let mut next = Generation::new(2);
@@ -183,6 +189,7 @@ fn invalid_candidates_leave_the_population_in_place() {
                     &changed_problem,
                     &run_state(&population),
                     &mut next,
+                    &rates,
                     &mut Rng::from_seed(0),
                 );
                 assert_eq!(
@@ -205,23 +212,27 @@ fn family_competition_keeps_a_candidate_or_else_its_fittest_parent() {
     .unwrap();
 
     // With the less fit parent first, the crossover is fitter than both parents.
-    let reproduction = Reproduction::new(FixedParents(0), 1.0, 0.0).unwrap();
+    let rates = FixedRates::new(1.0, 0.0).unwrap();
+    let reproduction = Reproduction::new(FixedParents(0));
     let mut next = Generation::new(1);
     reproduction.breed_into(
         &model,
         &run_state(&population),
         &mut next,
+        &rates,
         &mut Rng::from_seed(0),
     );
     assert_eq!(sorted_genomes(&next), [vec![true, true]]);
 
     // With the fitter parent first, the crossover is less fit than that parent, which survives.
-    let reproduction = Reproduction::new(FixedParents(1), 1.0, 0.0).unwrap();
+    let rates = FixedRates::new(1.0, 0.0).unwrap();
+    let reproduction = Reproduction::new(FixedParents(1));
     let mut next = Generation::new(1);
     reproduction.breed_into(
         &model,
         &run_state(&population),
         &mut next,
+        &rates,
         &mut Rng::from_seed(0),
     );
     assert_eq!(sorted_genomes(&next), [vec![false, true]]);
@@ -237,28 +248,28 @@ fn place_competition_replaces_only_the_fittest_parent_of_a_fitter_candidate() {
     .unwrap();
 
     // With the less fit parent first, the crossover is fitter than both parents.
-    let reproduction = Reproduction::new(FixedParents(0), 1.0, 0.0)
-        .unwrap()
-        .with_survival(PlaceCompetition);
+    let rates = FixedRates::new(1.0, 0.0).unwrap();
+    let reproduction = Reproduction::new(FixedParents(0)).with_survival(PlaceCompetition);
     let mut next = Generation::new(2);
     reproduction.breed_into(
         &model,
         &run_state(&population),
         &mut next,
+        &rates,
         &mut Rng::from_seed(0),
     );
     assert_eq!(sorted_genomes(&next), [vec![true, false], vec![true, true]]);
 
     // With the fitter parent first, the crossover is less fit than that parent, so both parents
     // keep their places.
-    let reproduction = Reproduction::new(FixedParents(1), 1.0, 0.0)
-        .unwrap()
-        .with_survival(PlaceCompetition);
+    let rates = FixedRates::new(1.0, 0.0).unwrap();
+    let reproduction = Reproduction::new(FixedParents(1)).with_survival(PlaceCompetition);
     let mut next = Generation::new(2);
     reproduction.breed_into(
         &model,
         &run_state(&population),
         &mut next,
+        &rates,
         &mut Rng::from_seed(0),
     );
     assert_eq!(sorted_genomes(&next), sorted_genomes(&population));
@@ -323,7 +334,8 @@ fn places_that_survivors_leave_go_to_the_fittest_individuals() {
         [fittest.clone(), second_fittest],
         [fittest, least_fit],
     ];
-    let mut reproduction = Reproduction::new(FixedParents(0), 0.0, 0.0).unwrap();
+    let rates = FixedRates::new(0.0, 0.0).unwrap();
+    let mut reproduction = Reproduction::new(FixedParents(0));
     for ((policy, set_survival), survivors) in policies().into_iter().zip(survivors) {
         set_survival(&mut reproduction);
         let mut next = Generation::new(2);
@@ -331,6 +343,7 @@ fn places_that_survivors_leave_go_to_the_fittest_individuals() {
             &model,
             &run_state(&population),
             &mut next,
+            &rates,
             &mut Rng::from_seed(0),
         );
         assert_eq!(sorted_genomes(&next), survivors, "{policy}");
@@ -342,8 +355,8 @@ fn repeated_candidates_do_not_shrink_the_generation() {
     // Without crossover and mutation, every candidate repeats an individual of the population.
     let model = WeightedBits::new(vec![1.0; 10], Objective::Maximize);
     let population = one_hot_population(&model, 4);
-    let mut reproduction =
-        Reproduction::from_strategy(SelectionStrategy::RouletteWheel, 0.0, 0.0).unwrap();
+    let rates = FixedRates::new(0.0, 0.0).unwrap();
+    let mut reproduction = Reproduction::from_strategy(SelectionStrategy::RouletteWheel).unwrap();
     for (policy, set_survival) in policies() {
         set_survival(&mut reproduction);
         let mut offspring = Generation::new(4);
@@ -352,6 +365,7 @@ fn repeated_candidates_do_not_shrink_the_generation() {
             &model,
             &run_state(&population),
             &mut offspring,
+            &rates,
             &mut Rng::from_seed(3),
         );
         assert_eq!(
@@ -367,14 +381,15 @@ fn a_generation_is_smaller_only_when_the_problem_has_fewer_solutions() {
     // Two bits have only four genomes, fewer than the generation needs.
     let model = WeightedBits::new(vec![1.0; 2], Objective::Maximize);
     let population = one_hot_population(&model, 2);
-    let reproduction =
-        Reproduction::from_strategy(SelectionStrategy::RouletteWheel, 0.5, 0.5).unwrap();
+    let rates = FixedRates::new(0.5, 0.5).unwrap();
+    let reproduction = Reproduction::from_strategy(SelectionStrategy::RouletteWheel).unwrap();
 
     let mut offspring = Generation::new(10);
     reproduction.breed_into(
         &model,
         &run_state(&population),
         &mut offspring,
+        &rates,
         &mut Rng::from_seed(3),
     );
 
@@ -383,23 +398,20 @@ fn a_generation_is_smaller_only_when_the_problem_has_fewer_solutions() {
 }
 
 #[test]
-fn invalid_rates_leave_reproduction_unchanged() {
-    assert!(Reproduction::<BitGenome>::new(RankSelection::new(), 1.5, 0.1).is_err());
-    assert!(Reproduction::<BitGenome>::new(RankSelection::new(), 0.5, f64::NAN).is_err());
-    let mut reproduction = Reproduction::<BitGenome>::new(RankSelection::new(), 0.5, 0.1).unwrap();
-    assert!(reproduction.set_rates(0.2, -0.1).is_err());
-    assert_eq!(
-        (reproduction.crossover_rate(), reproduction.mutation_rate()),
-        (0.5, 0.1)
-    );
+fn invalid_rates_are_rejected() {
+    assert!(FixedRates::new(1.5, 0.1).is_err());
+    assert!(FixedRates::new(0.5, f64::NAN).is_err());
+    assert!(FixedRates::new(0.2, -0.1).is_err());
+    let rates = FixedRates::new(0.5, 0.1).unwrap();
+    assert_eq!((rates.crossover(), rates.mutation()), (0.5, 0.1));
 }
 
 #[test]
 fn parallel_breeding_is_reproducible() {
     let model = WeightedBits::new(vec![1.0; 8], Objective::Maximize);
     let population = one_hot_population(&model, 8);
-    let reproduction =
-        Reproduction::from_strategy(SelectionStrategy::Tournament(2), 0.9, 0.5).unwrap();
+    let rates = FixedRates::new(0.9, 0.5).unwrap();
+    let reproduction = Reproduction::from_strategy(SelectionStrategy::Tournament(2)).unwrap();
     let breed = |threads| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
@@ -411,6 +423,7 @@ fn parallel_breeding_is_reproducible() {
                     &model,
                     &run_state(&population),
                     &mut offspring,
+                    &rates,
                     &mut Rng::from_seed(9),
                 );
                 Vec::from(offspring)
