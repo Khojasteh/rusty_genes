@@ -28,20 +28,20 @@ pub fn benchmark_crossover_strategies<M: Measurement>(
 
     group.throughput(Throughput::Elements(genome_length as u64));
 
-    group.bench_function("GPX2", |b| {
+    group.bench_function("CommonPartition", |b| {
         let mut rng = Rng::from_seed(0);
         b.iter_batched(
             || (genome1.clone(), genome2.clone()),
-            |(p1, p2)| CrossoverStrategy::GeneralizedPartition2.crossover(&p1, &p2, &mut rng),
+            |(p1, p2)| CrossoverStrategy::CommonPartition.crossover(&p1, &p2, &mut rng),
             BatchSize::SmallInput,
         );
     });
 
-    group.bench_function("SCX", |b| {
+    group.bench_function("Successor", |b| {
         let mut rng = Rng::from_seed(0);
         b.iter_batched(
             || (genome1.clone(), genome2.clone()),
-            |(p1, p2)| CrossoverStrategy::SequentialConstructive.crossover(&p1, &p2, &mut rng),
+            |(p1, p2)| CrossoverStrategy::Successor.crossover(&p1, &p2, &mut rng),
             BatchSize::SmallInput,
         );
     });

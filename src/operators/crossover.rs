@@ -8,21 +8,16 @@ use std::{hash::Hash, ops::Range};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CrossoverStrategy {
-    /// Generalized Partition Crossover 2 (GPX2) is a permutation-based method that identifies the
-    /// partitions of the parent genomes: chains of genes that are neighbors in both parents. The
-    /// offspring keeps every partition intact and joins the partitions in a random order, so it
-    /// preserves the structure the parents share while exploring new combinations of it. See
-    /// [`generalized_partition_2_crossover`] to choose the order of the partitions.
-    GeneralizedPartition2,
+    /// Keeps chains of neighbors shared by both parents and joins them in a random order.
+    /// See [`common_partition_crossover`] to choose the partition order yourself.
+    CommonPartition,
 
-    /// Sequential Constructive Crossover (SCX) is a permutation-based method that selects the best
-    /// next gene from the parent genomes by prioritizing genes that appear earlier in either parent
-    /// genome, while ensuring that each gene appears exactly once in the offspring.
-    SequentialConstructive,
+    /// Starts at a random gene and follows successors from either parent.
+    /// See [`successor_crossover`] for how it chooses between the successors.
+    Successor,
 
-    /// Edge Recombination Crossover (ERX) is a permutation-based method that creates a neighbor
-    /// list for each gene based on its neighbors in the parent genomes, and then constructs the
-    /// offspring by iteratively selecting the next gene with the shortest neighbor list.
+    /// Starts at a random gene and prefers neighbors with the fewest remaining links, breaking
+    /// ties and dead ends randomly. See [`edge_recombination_crossover`] (ERX).
     EdgeRecombination,
 
     /// Partially Mapped Crossover (PMX) is a permutation-based method that creates a mapping
@@ -33,16 +28,12 @@ pub enum CrossoverStrategy {
     /// genes from one parent while filling in the gaps with genes from the other parent.
     Order,
 
-    /// Cycle Crossover (CX) is a permutation-based method that identifies cycles between the parent
-    /// genomes and combines them to create the offspring, ensuring that each gene appears exactly
-    /// once in the offspring.
-    ///
-    /// It is worth to mention that unlike the other methods, no randomness is involved in CX.
+    /// Takes the cycle through a random position from the first parent and all other positions
+    /// from the second. See [`cycle_crossover`] (CX).
     Cycle,
 
-    /// Single-Point Crossover (SPX) is a method that selects a single point on the genome. Every
-    /// gene before this point is copied from the first parent, and genes from this point forward
-    /// is copied from the second parent.
+    /// Joins the first parent's prefix to the second's suffix at a random cut between genes.
+    /// A single-gene genome is copied from the first parent. See [`single_point_crossover`] (SPX).
     SinglePoint,
 }
 
@@ -75,18 +66,18 @@ impl CrossoverStrategy {
         }
 
         match self {
-            Self::GeneralizedPartition2 => {
-                generalized_partition_2_crossover(parent1, parent2, |_, partitions| {
+            Self::CommonPartition => {
+                common_partition_crossover(parent1, parent2, |_, partitions| {
                     rng.random_range(0..partitions.len())
                 })
             }
-            Self::SequentialConstructive => {
+            Self::Successor => {
                 let pivot = *rng.choose(parent1).unwrap();
-                sequential_constructive_crossover(parent1, parent2, pivot)
+                successor_crossover(parent1, parent2, pivot)
             }
             Self::EdgeRecombination => {
                 let pivot = *rng.choose(parent1).unwrap();
-                edge_recombination_crossover(parent1, parent2, pivot)
+                edge_recombination_crossover(parent1, parent2, pivot, rng)
             }
             Self::PartiallyMapped => {
                 let range = random_range(parent1.len(), rng);
@@ -96,39 +87,26 @@ impl CrossoverStrategy {
                 let range = random_range(parent1.len(), rng);
                 order_crossover(parent1, parent2, range)
             }
-            Self::Cycle => cycle_crossover(parent1, parent2),
+            Self::Cycle => {
+                let start = rng.random_range(0..parent1.len());
+                cycle_crossover(parent1, parent2, start)
+            }
             Self::SinglePoint => {
-                let point = rng.random_range(0..parent1.len());
+                // The point is between two genes, so the offspring takes at least one gene of
+                // each parent; a single gene has no such point and is copied from parent1.
+                let point = rng.random_range(1..parent1.len().max(2));
                 single_point_crossover(parent1, parent2, point)
             }
         }
     }
 }
 
-/// Performs a Generalized Partition Crossover 2 (GPX2) operation between two parent genomes.
+/// Joins the parents' [`common_partitions`] without breaking the chains inside them.
 ///
-/// Generalized Partition Crossover 2 (GPX2) identifies common partitions (sequences of genes that
-/// are common to both genomes) between the two parent genomes and then assembles a new offspring
-/// genome from these partitions. The order in which the partitions are selected and added to the
-/// offspring genome is determined by the provided partition selection function.
-///
-/// The GPX2 crossover algorithm is designed to preserve common structures (partitions) between the
-/// parents in the offspring, which can be beneficial in many optimization problems.
-///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-/// * `partition_selector` - A function to select which partition to add to the offspring genome
-///   next. The function is given an optional reference to the last gene added to the offspring
-///   genome and a slice of the remaining partitions. It should return the index of the partition
-///   to add next.
-///
-/// # Returns
-/// A `Vec<G>` representing the offspring's genome. The length of this genome will be the
-/// same as the parents' genomes.
-///
-/// # Note
-/// GPX2 is applicable to permutation-based problems.
+/// Parents must be permutations of the same distinct genes. `partition_selector` receives
+/// the last gene appended, or [`None`] initially, and the remaining partitions. It must return
+/// an index into that slice. The offspring has the parents' length; the new links between
+/// partitions need not appear in either parent.
 ///
 /// # Panics
 /// This method will panic if the parent genomes have different lengths.
@@ -140,10 +118,10 @@ impl CrossoverStrategy {
 /// let parent1 = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// let parent2 = vec![8, 9, 0, 7, 4, 5, 6, 3, 2, 1];
 ///
-/// let offspring1 = generalized_partition_2_crossover(&parent1, &parent2, |_last, _partitions| 0);
+/// let offspring1 = common_partition_crossover(&parent1, &parent2, |_last, _partitions| 0);
 /// assert_eq!(offspring1, vec![0, 9, 8, 7, 4, 5, 6, 1, 2, 3]);
 ///
-/// let offspring2 = generalized_partition_2_crossover(&parent1, &parent2, |last, partitions| {
+/// let offspring2 = common_partition_crossover(&parent1, &parent2, |last, partitions| {
 ///     last.and_then(|last_selected_gene| {
 ///         let preferred_gene = (last_selected_gene + 3) % 10;
 ///         partitions
@@ -155,7 +133,7 @@ impl CrossoverStrategy {
 /// });
 /// assert_eq!(offspring2, vec![0, 9, 8, 1, 2, 3, 4, 5, 6, 7]);
 /// ```
-pub fn generalized_partition_2_crossover<G, F>(
+pub fn common_partition_crossover<G, F>(
     parent1: &[G],
     parent2: &[G],
     mut partition_selector: F,
@@ -179,23 +157,19 @@ where
     offspring
 }
 
-/// Performs a Sequential Constructive Crossover (SCX) operation between two parent genomes.
+/// Builds a permutation from `pivot` by following the successors of each gene in its parents.
 ///
-/// Sequential Constructive Crossover (SCX) selects the best next gene from the parent genomes
-/// by prioritizing genes that appear earlier in either parent genome, while ensuring that each
-/// gene appears exactly once in the offspring.
+/// Successor Crossover starts the offspring with `pivot` and adds one gene at a time, treating each
+/// parent genome as a cycle. It considers the successors of the last added gene in the two
+/// parents:
+/// * If only one of them is not yet in the offspring, it adds that one.
+/// * If neither is in the offspring yet, it adds the successor in `parent1` when that gene is at
+///   an earlier position in `parent2` than the successor in `parent2` is in `parent1`, and the
+///   successor in `parent2` otherwise.
+/// * If both are in the offspring already, it adds the first gene of `parent1` that is not.
 ///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-/// * `pivot` - The gene used to start constructing the offspring genome.
-///
-/// # Returns
-/// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-/// the same as the parents' genomes.
-///
-/// # Note
-/// SCX is applicable to permutation-based problems.
+/// Parents must be permutations of the same distinct genes. Genomes with fewer than two
+/// genes are copied from `parent1` without using `pivot`.
 ///
 /// # Panics
 /// This method will panic if the parent genomes have different lengths.
@@ -207,10 +181,10 @@ where
 /// let parent1 = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// let parent2 = vec![8, 9, 0, 7, 4, 5, 6, 3, 2, 1];
 ///
-/// let offspring = sequential_constructive_crossover(&parent1, &parent2, 2);
+/// let offspring = successor_crossover(&parent1, &parent2, 2);
 /// assert_eq!(offspring, vec![2, 1, 8, 9, 0, 7, 4, 5, 6, 3]);
 /// ```
-pub fn sequential_constructive_crossover<G>(parent1: &[G], parent2: &[G], pivot: G) -> Vec<G>
+pub fn successor_crossover<G>(parent1: &[G], parent2: &[G], pivot: G) -> Vec<G>
 where
     G: Copy + Eq + Hash,
 {
@@ -283,24 +257,18 @@ where
 
 /// Performs an Edge Recombination Crossover (ERX) operation between two parent genomes.
 ///
-/// Edge Recombination Crossover (ERX) creates a neighbor list for each gene based on its
-/// neighbors in the parent genomes, and then constructs the offspring by iteratively
-/// selecting the next gene with the shortest neighbor list.
+/// Edge Recombination Crossover (ERX) creates a neighbor list for each gene from its neighbors in
+/// both parent genomes, treating each genome as a cycle. Starting from `pivot`, it removes the
+/// current gene from every list and continues with the neighbor of the current gene that has the
+/// fewest neighbors left, choosing at random among neighbors with equally few. When the current
+/// gene has no neighbor left, it continues with a random gene not yet in the offspring.
 ///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-/// * `pivot` - The gene used to start constructing the offspring genome.
-///
-/// # Returns
-/// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-/// the same as the parents' genomes.
-///
-/// # Note
-/// ERX is applicable to permutation-based problems.
+/// Parents must be permutations of the same distinct genes. Genomes with fewer than two
+/// genes are copied from `parent1` without using `pivot`.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// Panics if the parent genomes have different lengths, or if `pivot` is not a
+/// gene of genomes that have at least two genes.
 ///
 /// # Example
 /// ```
@@ -309,7 +277,7 @@ where
 /// let parent1 = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// let parent2 = vec![8, 9, 0, 7, 4, 5, 6, 3, 2, 1];
 ///
-/// let mut offspring = edge_recombination_crossover(&parent1, &parent2, 2);
+/// let mut offspring = edge_recombination_crossover(&parent1, &parent2, 2, &mut Rng::from_seed(1));
 ///
 /// // The offspring has every gene of its parents exactly once.
 /// assert_eq!(offspring.len(), parent1.len());
@@ -318,7 +286,12 @@ where
 /// assert_eq!(offspring.len(), parent1.len());
 /// assert!(offspring.iter().all(|gene| parent1.contains(gene)));
 /// ```
-pub fn edge_recombination_crossover<G>(parent1: &[G], parent2: &[G], pivot: G) -> Vec<G>
+pub fn edge_recombination_crossover<G>(
+    parent1: &[G],
+    parent2: &[G],
+    pivot: G,
+    rng: &mut Rng,
+) -> Vec<G>
 where
     G: Copy + Eq + Hash,
 {
@@ -329,8 +302,7 @@ where
         return parent1.to_vec();
     }
 
-    // Initialize the neighbor list for each gene. A list holds at most four genes, in the order
-    // of the parents, which also decides ties between neighbors.
+    // Two cyclic parents contribute at most four distinct neighbors per gene.
     let mut neighbor_lists: GeneMap<G, Vec<G>> =
         GeneMap::with_capacity_and_hasher(n, Default::default());
     [parent1, parent2]
@@ -351,14 +323,21 @@ where
             }
         });
 
-    let mut visited = GeneSet::with_capacity_and_hasher(n, Default::default());
-    // Every gene of parent1 before this position is visited.
-    let mut first_unvisited = 0;
+    // The genes not yet in the offspring, and the position of each in that list, so a random
+    // one can be drawn and removed in constant time.
+    let mut unvisited = parent1.to_vec();
+    let mut unvisited_positions = positions(parent1);
 
     let mut current = pivot;
     let mut offspring = vec![pivot; n];
     for next in offspring.iter_mut().skip(1) {
-        visited.insert(current);
+        let position = unvisited_positions
+            .remove(&current)
+            .expect("the pivot should be a gene of the parents");
+        unvisited.swap_remove(position);
+        if let Some(&moved) = unvisited.get(position) {
+            unvisited_positions.insert(moved, position);
+        }
 
         // Remove the current gene from the neighbor list of all genes. Neighborhood is
         // symmetric, so only the neighbors of the current gene have it in their lists.
@@ -372,20 +351,26 @@ where
             }
         }
 
-        // Select the next gene with the shortest neighbor list
-        *next = current_neighbors
+        let neighbors = current_neighbors
             .iter()
-            .filter(|gene| !visited.contains(gene))
-            .min_by_key(|&gene| neighbor_lists[gene].len())
-            .copied()
-            .unwrap_or_else(|| {
-                // No gene is found in the current neighbor list
-                // Select the first unvisited gene of parent1
-                while visited.contains(&parent1[first_unvisited]) {
-                    first_unvisited += 1;
-                }
-                parent1[first_unvisited]
-            });
+            .filter(|&gene| unvisited_positions.contains_key(gene));
+        let fewest = neighbors
+            .clone()
+            .map(|gene| neighbor_lists[gene].len())
+            .min();
+        *next = match fewest {
+            Some(fewest) => {
+                let mut candidates = neighbors.filter(|&gene| neighbor_lists[gene].len() == fewest);
+                let count = candidates.clone().count();
+                let skip = if count > 1 {
+                    rng.random_range(0..count)
+                } else {
+                    0
+                };
+                *candidates.nth(skip).unwrap()
+            }
+            None => unvisited[rng.random_range(0..unvisited.len())],
+        };
 
         current = *next;
     }
@@ -543,23 +528,20 @@ where
 
 /// Performs a Cycle Crossover (CX) operation between two parent genomes.
 ///
-/// Cycle Crossover (CX) identifies cycles between the parent genomes and combines them
-/// to create the offspring, ensuring that each gene appears exactly once in the offspring.
+/// Cycle Crossover (CX) keeps every gene in the position it has in one of the parents. Starting
+/// at position `start`, it takes the gene of `parent1`, finds the position of that gene in
+/// `parent2`, and repeats from there until it returns to `start`. The offspring takes the genes
+/// of `parent1` at the positions of this cycle, and the genes of `parent2` everywhere else.
 ///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-///
-/// # Returns
-/// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-/// the same as the parents' genomes.
-///
-/// # Note
-/// CX is applicable to permutation-based problems.
+/// Parents must be permutations of the same distinct genes. `start` chooses the cycle; if
+/// both parents have the same gene there, that cycle has one position and the result equals
+/// `parent2`. Empty parents return an empty genome without using `start`.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths, or if a gene of `parent1`
-/// is missing from `parent2`.
+/// Panics if the parent genomes have different lengths, if they are not empty and
+/// `start` is not one of their positions, or if a gene of the cycle in `parent1` is missing from
+/// `parent2` or the cycle does not return to `start` because the parents are not permutations
+/// of the same genes.
 ///
 /// # Example
 /// ```
@@ -568,75 +550,45 @@ where
 /// let parent1 = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 /// let parent2 = vec![8, 9, 0, 7, 4, 5, 6, 3, 2, 1];
 ///
-/// let offspring = cycle_crossover(&parent1, &parent2);
-/// assert_eq!(offspring, vec![0, 9, 2, 3, 4, 5, 6, 7, 8, 1]);
+/// // The cycle through position 1 is the positions 1 and 9.
+/// let offspring = cycle_crossover(&parent1, &parent2, 1);
+/// assert_eq!(offspring, vec![8, 1, 0, 7, 4, 5, 6, 3, 2, 9]);
 /// ```
-pub fn cycle_crossover<G>(parent1: &[G], parent2: &[G]) -> Vec<G>
+pub fn cycle_crossover<G>(parent1: &[G], parent2: &[G], start: usize) -> Vec<G>
 where
     G: Copy + Eq + Hash,
 {
     assert!(parent1.len() == parent2.len());
 
     let n = parent1.len();
-    if n < 2 {
-        return parent1.to_vec();
+    if n == 0 {
+        return Vec::new();
     }
+    assert!(start < n, "the start should be a position of the genomes");
 
     let positions2 = GenePositions::new(parent2);
-    let mut offspring = vec![parent1[0]; n];
-    let mut visited = vec![false; n];
+    let mut offspring = parent2.to_vec();
 
-    let mut cycle_start = 0;
-    let mut first_parent = true;
-    // Find the cycles between the parent genomes and combine them to create the offspring
-    while cycle_start < n {
-        let mut index = cycle_start;
-
-        // Find the next cycle by following each gene of parent1 to its position in parent2
-        while !visited[index] {
-            visited[index] = true;
-
-            offspring[index] = if first_parent {
-                parent1[index]
-            } else {
-                parent2[index]
-            };
-
-            index = positions2
-                .get(&parent1[index])
-                .expect("the parents should be permutations of the same genes");
-        }
-
-        // Switch the parent for the next cycle
-        first_parent = !first_parent;
-
-        // Find the next unvisited element; every element before the cycle start is visited
-        if let Some(offset) = visited[cycle_start..].iter().position(|&x| !x) {
-            cycle_start += offset;
-        } else {
-            break;
+    // Between permutations of the same genes, the cycle returns to its start within as many
+    // steps as the genomes have genes; otherwise it can circle elsewhere forever.
+    let mut index = start;
+    for _ in 0..n {
+        offspring[index] = parent1[index];
+        index = positions2
+            .get(&parent1[index])
+            .expect("the parents should be permutations of the same genes");
+        if index == start {
+            return offspring;
         }
     }
-
-    offspring
+    panic!("the parents should be permutations of the same genes");
 }
 
 /// Performs a Single-Point Crossover (SPX) operation between two parent genomes.
 ///
-/// Single-Point Crossover (SPX) swaps all genes beyond a selected point on the first
-/// parent genome with all the genes from the same point in the second parent genome.
-///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-/// * `point` - The crossover point where the genes should be swapped.
-///
-/// # Returns
-/// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-/// the same as the parents' genomes.
-///
-/// # Note
-/// SPX is not applicable to permutation-based problems where each gene should be unique.
+/// A point of zero copies `parent2`; a point at or beyond the end copies `parent1`. The
+/// offspring has the parents' length, but may repeat or omit genes, so this does not preserve
+/// a permutation.
 ///
 /// # Panics
 /// This method will panic if the parent genomes have different lengths.
