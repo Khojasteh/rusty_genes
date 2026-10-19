@@ -70,6 +70,30 @@ depend on the makespans of its parents, and selects parents by its default roule
 cargo run --release --example flow_shop
 ```
 
+The [curve fitting example](examples/curve_fitting.rs) solves a problem that is not a
+permutation: it fits the four parameters of a damped oscillation to 60 noisy measurements by
+minimizing the error of the curve. Its solutions are real numbers within bounds, so it defines
+its own crossover and mutation and hashes its parameters with `hash_f64_slice`. It runs the
+diversity-guided genetic algorithm, measuring how far its solutions lie from their average point
+with `distance_to_average_point`, and selects parents by its default binary tournaments. The
+algorithm's default diversity thresholds suit real-valued solutions like these; for genomes of
+bits or permutations, its documentation explains how to raise the low threshold so that the
+algorithm still mutates:
+
+```sh
+cargo run --release --example curve_fitting
+```
+
+Each example takes options that size its problem and set its population, generation limit, time
+limit, and seed, which makes it suitable for measuring the library on larger problems. A time
+limit makes the result depend on the speed of the machine, so a seeded run that it stops may
+not repeat. The options keep
+the problem and the result above by default, and `--help` lists them:
+
+```sh
+cargo run --release --example flow_shop -- --jobs 500 --machines 20 --population 200
+```
+
 ## Defining your own problem
 
 A problem consists of an individual, which holds a candidate solution and its score, and a
@@ -167,9 +191,9 @@ Keep these in mind when you define a model:
   evaluated initial population and is called once per run. Maximization stops at or above the
   target; minimization stops at or below it. The default `None` leaves stopping to the callback.
   Keep a generation or stagnation limit for problems that may never reach their goal.
-- Populations are ordered from worst to best under their objective. `fittest`, `fittest_so_far`,
-  elites, selection, and survival follow that direction. `stats().min()`, `max()`, and `avg()`
-  always describe the numerical scores in their original units.
+- Populations are ordered from worst to best under their objective. `fittest`, the run's
+  `fittest_so_far`, elites, selection, and survival follow that direction. `stats().min()`,
+  `max()`, and `avg()` always describe the numerical scores in their original units.
 - Roulette-wheel and Boltzmann selection derive probabilities internally. For minimization,
   roulette weights are proportional to `max(0, maximum score) - score`, with uniform selection
   when all weights are zero. Boltzmann probabilities are proportional to `exp(-score / T)`,
