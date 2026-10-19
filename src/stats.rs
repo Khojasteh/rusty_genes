@@ -131,6 +131,14 @@ impl Stats {
         }
     }
 
+    /// Returns the power of two by which `sample` is scaled.
+    #[inline]
+    fn scale_of(sample: f64) -> f64 {
+        // Clearing the sign and significand gives a power of two. Zero and subnormal samples use
+        // the smallest normal scale so their squared normalized values remain representable.
+        f64::from_bits(sample.to_bits() & 0x7ff0_0000_0000_0000).max(f64::MIN_POSITIVE)
+    }
+
     #[inline]
     fn scaled_variance(&self) -> f64 {
         if self.count > 1 {
@@ -165,10 +173,7 @@ impl Stats {
     #[inline]
     pub fn record(&mut self, sample: f64) {
         if sample.is_finite() && sample != 0.0 {
-            // Clearing the significand gives a power of two. Subnormal samples use the
-            // smallest normal scale so their squared normalized values remain representable.
-            let scale =
-                f64::from_bits(sample.to_bits() & 0x7ff0_0000_0000_0000).max(f64::MIN_POSITIVE);
+            let scale = Self::scale_of(sample);
             if scale > self.scale {
                 let ratio = self.scale / scale;
                 self.scaled_mean *= ratio;
@@ -308,6 +313,47 @@ impl Spread {
 }
 
 impl PopulatedStats {
+    /// Summarizes the finite scores of `items`, which are sorted by score in ascending or
+    /// descending order, in two passes over them.
+    ///
+    /// The extrema and their indices are those [`Stats::record`] finds, because they lie at the
+    /// ends of the order. Knowing the largest magnitude in advance, the scores are scaled once,
+    /// and their variance is accumulated from deviations from their mean, with the correction of
+    /// the corrected two-pass algorithm.
+    pub(crate) fn of_sorted<T>(items: &[T], score: impl Fn(&T) -> f64) -> Option<Self> {
+        let (first, last) = (score(items.first()?), score(items.last()?));
+        // Recording keeps the first of equal extrema, which begins the run of scores equal to
+        // the last one.
+        let run = items.partition_point(|item| score(item) != last);
+        let ((min, arg_min), (max, arg_max)) = if first <= last {
+            ((first, 0), (score(&items[run]), run))
+        } else {
+            ((score(&items[run]), run), (first, 0))
+        };
+
+        let count = items.len();
+        let scale = Stats::scale_of(min).max(Stats::scale_of(max));
+        let scaled_mean = items.iter().map(|item| score(item) / scale).sum::<f64>() / count as f64;
+        let (sum, sum_of_squares) = items.iter().fold((0.0, 0.0), |(sum, squares), item| {
+            let deviation = score(item) / scale - scaled_mean;
+            (sum + deviation, squares + deviation * deviation)
+        });
+        let scaled_m2 = (sum_of_squares - sum * sum / count as f64).max(0.0);
+
+        Some(Self {
+            stats: Stats {
+                count,
+                min,
+                arg_min,
+                max,
+                arg_max,
+                scaled_mean,
+                scaled_m2,
+                scale,
+            },
+        })
+    }
+
     pub(crate) fn spread(&self) -> Option<Spread> {
         let variance = self.stats.scaled_variance();
         (variance > 0.0).then(|| Spread {
@@ -315,6 +361,7 @@ impl PopulatedStats {
             scale: self.stats.scale,
         })
     }
+
     /// Returns the total number of samples.
     #[inline]
     pub fn count(&self) -> usize {
@@ -501,5 +548,55 @@ mod tests {
         assert_eq!(stats.arg_min(), Some(4));
         assert_eq!(stats.arg_max(), Some(3));
         assert!((stats.var().unwrap() / 5e307 - 1.0).abs() <= 4.0 * f64::EPSILON);
+    }
+
+    #[test]
+    fn sorted_statistics_find_the_extrema_that_recording_finds() {
+        let sequences: [&[f64]; 5] = [
+            &[1.0, 2.0, 3.0, 3.0],
+            &[3.0, 3.0, 2.0, 1.0, 1.0],
+            &[-0.0, 0.0, 0.0],
+            &[0.0, -0.0, -1.0],
+            &[5.0, 5.0],
+        ];
+        for samples in sequences {
+            let recorded = samples.iter().copied().collect::<Stats>();
+            let sorted = PopulatedStats::of_sorted(samples, |&s| s).unwrap();
+            assert_eq!(sorted.count(), recorded.count());
+            assert_eq!(sorted.min().to_bits(), recorded.min().unwrap().to_bits());
+            assert_eq!(sorted.max().to_bits(), recorded.max().unwrap().to_bits());
+            assert_eq!(sorted.arg_min(), recorded.arg_min().unwrap());
+            assert_eq!(sorted.arg_max(), recorded.arg_max().unwrap());
+        }
+        assert!(PopulatedStats::of_sorted(&[] as &[f64], |&s| s).is_none());
+    }
+
+    #[test]
+    fn sorted_statistics_preserve_representable_results_at_extreme_scales() {
+        for scale in [1.0, 1e154, 1e-200, f64::MIN_POSITIVE, f64::from_bits(1)] {
+            for samples in [[-scale, 0.0, scale], [scale, 0.0, -scale]] {
+                let stats = PopulatedStats::of_sorted(&samples, |&s| s).unwrap();
+                assert_eq!(stats.avg(), 0.0);
+                // The sample variance of [-s, 0, s] is s squared, so its STD is s.
+                assert!((stats.std() / scale - 1.0).abs() <= 4.0 * f64::EPSILON);
+                if scale >= 1.0 {
+                    assert!((stats.var() / (scale * scale) - 1.0).abs() <= 4.0 * f64::EPSILON);
+                }
+            }
+        }
+        let stats = PopulatedStats::of_sorted(&[-1e308, 1e308], |&s| s).unwrap();
+        assert_eq!(stats.avg(), 0.0);
+        assert!(stats.std().is_finite());
+
+        let samples = [-1e154, -1e-200, 0.0, 1e-200, 1e154];
+        let stats = PopulatedStats::of_sorted(&samples, |&s| s).unwrap();
+        assert_eq!(stats.avg(), 0.0);
+        assert!((stats.var() / 5e307 - 1.0).abs() <= 4.0 * f64::EPSILON);
+
+        // A spread far below the magnitude of the scores keeps its precision.
+        let samples = [1e9 + 1.0, 1e9 + 2.0, 1e9 + 3.0];
+        let stats = PopulatedStats::of_sorted(&samples, |&s| s).unwrap();
+        assert_eq!(stats.avg(), 1e9 + 2.0);
+        assert!((stats.var() - 1.0).abs() <= 4.0 * f64::EPSILON);
     }
 }

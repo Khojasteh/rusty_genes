@@ -253,9 +253,10 @@ pub fn benchmark_selection_strategies<M: Measurement>(
     }
 }
 
-/// Measures creating a population, which validates, sorts, and deduplicates the individuals and
-/// collects their statistics, for different shapes of the individuals' scores, and for
-/// individuals with a constant hash.
+/// Measures creating a population, which validates, sorts, and deduplicates the individuals, for
+/// different shapes of the individuals' scores, and for individuals with a constant hash. Also
+/// measures computing the statistics of a new population, which happens when they are first
+/// requested.
 pub fn benchmark_population<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     population_size: usize,
@@ -299,6 +300,14 @@ pub fn benchmark_population<M: Measurement>(
             );
         });
     }
+
+    group.bench_function("Statistics", |b| {
+        b.iter_batched_ref(
+            || Population::new(distinct.clone()).unwrap(),
+            |population| *population.stats(),
+            BatchSize::SmallInput,
+        );
+    });
 }
 
 /// Measures the steps of a generation that the model and the algorithm provide by default, on
