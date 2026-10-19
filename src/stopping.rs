@@ -3,10 +3,16 @@ use std::{fmt, ops::ControlFlow, time::Duration};
 
 /// Why a run of an [`Evolution`] stopped.
 ///
-/// The run stops with the reason its progress callback gives, such as one of [`Limits`].
+/// The run stops with [`GoalReached`](StopReason::GoalReached) when it reaches the model's
+/// [goal](EvolutionModel::goal_score), and otherwise with the reason its progress callback
+/// gives, such as one of [`Limits`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StopReason {
+    /// The fittest individual so far reached the model's
+    /// [goal score](EvolutionModel::goal_score).
+    GoalReached,
+
     /// The run reached its limit on the number of generations.
     GenerationLimit,
 
@@ -26,6 +32,7 @@ pub enum StopReason {
 impl fmt::Display for StopReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::GoalReached => f.write_str("goal reached"),
             Self::GenerationLimit => f.write_str("generation limit reached"),
             Self::StagnationLimit => f.write_str("stagnation limit reached"),
             Self::TimeLimit => f.write_str("time limit reached"),

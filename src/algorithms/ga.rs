@@ -2,12 +2,9 @@ use super::*;
 
 /// Represents the parameters of a [`GeneticAlgorithm`].
 ///
-/// # Note
-/// The parameters are validated when a [`GeneticAlgorithm`] is created with them. How long the
-/// algorithm runs is decided by the `progress` closure given to the methods of [`Evolution`].
-///
-/// New parameters may be added in the future, so the parameters are created by
-/// [`Default::default`] and then changed as needed.
+/// Start with [`Default::default`] and modify fields before passing them to
+/// [`GeneticAlgorithm::new`], which validates them. Stopping belongs to the model's goal and
+/// the progress callback supplied to [`Evolution`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GeneticAlgorithmParameters {
@@ -106,7 +103,6 @@ impl GeneticAlgorithmParameters {
 /// ```
 /// use rusty_genes::*;
 /// use rusty_genes::one_max::*;
-/// use std::ops::ControlFlow;
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
@@ -116,16 +112,9 @@ impl GeneticAlgorithmParameters {
 /// ga_params.selection_strategy = SelectionStrategy::Linear(1.25);
 /// let mut ga = GeneticAlgorithm::new(OneMaxEvolutionModel, ga_params)?.into_evolution();
 ///
-/// // Stop when every bit is set, or after 200 generations.
 /// let limits = Limits::new().generations(200);
 /// let solution = ga
-///     .run(&ONE_MAX_LENGTH, |state| {
-///         if state.fittest_so_far().score() < ONE_MAX_LENGTH as f64 {
-///             limits.check(state)
-///         } else {
-///             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
-///         }
-///     })?
+///     .run(&ONE_MAX_LENGTH, |state| limits.check(state))?
 ///     .into_fittest_so_far();
 ///
 /// println!("Best score: {} of {}", solution.score(), ONE_MAX_LENGTH);

@@ -40,11 +40,16 @@ impl RandomIndividual<Vec<bool>> for BitGenome {
 pub struct WeightedBits {
     pub weights: Vec<f64>,
     pub objective: Objective,
+    pub goal: Option<f64>,
 }
 
 impl WeightedBits {
     pub fn new(weights: Vec<f64>, objective: Objective) -> Self {
-        Self { weights, objective }
+        Self {
+            weights,
+            objective,
+            goal: None,
+        }
     }
 
     pub fn individual(&self, genes: &[bool]) -> BitGenome {
@@ -58,6 +63,9 @@ impl EvolutionModel for WeightedBits {
     type Individual = BitGenome;
     fn objective(&self) -> Objective {
         self.objective
+    }
+    fn goal_score(&self, _: &Population<BitGenome>) -> Option<f64> {
+        self.goal
     }
     fn crossover(&self, first: &BitGenome, second: &BitGenome, rng: &mut Rng) -> BitGenome {
         CrossoverStrategy::SinglePoint
