@@ -12,11 +12,11 @@
 //! [`Population`] of individuals generation by generation, and an [`Evolution`] runs it. The
 //! [`RunState`] of a run holds its population and history, such as its generation number and
 //! the fittest individual of any generation, and a progress callback observes it to decide when
-//! the run stops, for example by [`Limits`]. The algorithms breed offspring through a
-//! [`Reproduction`], which selects parents by a [`SelectionMechanism`] and keeps an offspring
-//! only if its [`SurvivalPolicy`] accepts it. Each of these can be replaced by an
-//! implementation of its trait, and [`EvolutionAlgorithm`] defines the steps of a custom
-//! algorithm.
+//! the run stops, for example by [`Limits`]. The algorithms breed each generation through a
+//! [`Reproduction`], which selects parents by a [`SelectionMechanism`] to breed candidates, and
+//! lets a [`SurvivalPolicy`] choose the next generation from the population and the candidates.
+//! Each of these can be replaced by an implementation of its trait, and [`EvolutionAlgorithm`]
+//! defines the steps of a custom algorithm.
 //!
 //! The crossover, mutation, and selection strategies are available as building blocks for models
 //! and algorithms: see [`CrossoverStrategy`], [`MutationStrategy`], and [`SelectionStrategy`].
@@ -64,6 +64,7 @@
 mod algorithms;
 mod error;
 mod evolution;
+mod generation;
 mod individual;
 mod model;
 mod objective;
@@ -78,6 +79,7 @@ mod stopping;
 pub use algorithms::*;
 pub use error::*;
 pub use evolution::*;
+pub use generation::*;
 pub use individual::*;
 pub use model::*;
 pub use objective::*;

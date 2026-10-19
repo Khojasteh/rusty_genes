@@ -35,16 +35,29 @@ fn create_test_population() -> Population<MockIndividual> {
     create_population(|i| i as f64 / POPULATION_SIZE as f64)
 }
 
-fn observed_probabilities<S>(strategy: &mut S, population: &Population<MockIndividual>) -> Vec<f64>
+fn observed_probabilities<S>(strategy: &S, population: &Population<MockIndividual>) -> Vec<f64>
+where
+    S: SelectionMechanism<MockIndividual>,
+{
+    observed_probabilities_at(strategy, population, 0)
+}
+
+/// Returns the observed probabilities of selecting each individual of `population` as
+/// generation number `generation` of a run.
+fn observed_probabilities_at<S>(
+    strategy: &S,
+    population: &Population<MockIndividual>,
+    generation: usize,
+) -> Vec<f64>
 where
     S: SelectionMechanism<MockIndividual>,
 {
     let mut rng = Rng::from_seed(0);
     let mut counts = vec![0; population.len()];
 
-    strategy.prepare(population);
+    let sampler = strategy.sampler(population, generation);
     for _ in 0..ITERATIONS {
-        let (index, _) = strategy.select(population, &mut rng);
+        let (index, _) = sampler.select(&mut rng);
         counts[index] += 1;
     }
     counts
@@ -65,9 +78,9 @@ fn assert_probabilities(observed: &[f64], expected: impl Fn(usize) -> f64) {
 
 #[test]
 fn tournament_selection_probabilities() {
-    let mut tournament = TournamentSelection::new(2).unwrap();
+    let tournament = TournamentSelection::new(2).unwrap();
     let population = create_test_population();
-    let observed = observed_probabilities(&mut tournament, &population);
+    let observed = observed_probabilities(&tournament, &population);
 
     let n = population.len() as f64;
     let size = tournament.size() as i32;
@@ -78,9 +91,9 @@ fn tournament_selection_probabilities() {
 
 #[test]
 fn roulette_wheel_selection_probabilities() {
-    let mut roulette_wheel = RouletteWheelSelection::new();
+    let roulette_wheel = RouletteWheelSelection::new();
     let population = create_test_population();
-    let observed = observed_probabilities(&mut roulette_wheel, &population);
+    let observed = observed_probabilities(&roulette_wheel, &population);
 
     let total_score = population.iter().map(|i| i.score).sum::<f64>();
     assert_probabilities(&observed, |index| population[index].score / total_score);
@@ -88,9 +101,9 @@ fn roulette_wheel_selection_probabilities() {
 
 #[test]
 fn roulette_wheel_selection_with_negative_score() {
-    let mut roulette_wheel = RouletteWheelSelection::new();
+    let roulette_wheel = RouletteWheelSelection::new();
     let population = create_population(|i| i as f64 - 20.0);
-    let observed = observed_probabilities(&mut roulette_wheel, &population);
+    let observed = observed_probabilities(&roulette_wheel, &population);
 
     // The scores are shifted by the lowest one, -20.
     let total_shifted = (0..POPULATION_SIZE).sum::<usize>() as f64;
@@ -99,10 +112,10 @@ fn roulette_wheel_selection_with_negative_score() {
 
 #[test]
 fn roulette_wheel_selection_with_zero_score() {
-    let mut roulette_wheel = RouletteWheelSelection::new();
+    let roulette_wheel = RouletteWheelSelection::new();
     let population: Population<MockIndividual> =
         vec![MockIndividual { score: 0.0 }].try_into().unwrap();
-    let observed = observed_probabilities(&mut roulette_wheel, &population);
+    let observed = observed_probabilities(&roulette_wheel, &population);
 
     assert_probabilities(&observed, |_| 1.0);
 }
@@ -121,16 +134,16 @@ fn roulette_preserves_probabilities_at_large_score_scales() {
                 .collect(),
         )
         .unwrap();
-        let observed = observed_probabilities(&mut RouletteWheelSelection::new(), &population);
+        let observed = observed_probabilities(&RouletteWheelSelection::new(), &population);
         assert_probabilities(&observed, |index| expected[index]);
     }
 }
 
 #[test]
 fn rank_selection_probabilities() {
-    let mut rank = RankSelection::new();
+    let rank = RankSelection::new();
     let population = create_test_population();
-    let observed = observed_probabilities(&mut rank, &population);
+    let observed = observed_probabilities(&rank, &population);
 
     let total_ranks = (population.len() * (population.len() + 1) / 2) as f64;
     assert_probabilities(&observed, |index| (index + 1) as f64 / total_ranks);
@@ -138,9 +151,9 @@ fn rank_selection_probabilities() {
 
 #[test]
 fn elitist_selection_probabilities() {
-    let mut elitist = ElitistSelection::new(0.7).unwrap();
+    let elitist = ElitistSelection::new(0.7).unwrap();
     let population = create_test_population();
-    let observed = observed_probabilities(&mut elitist, &population);
+    let observed = observed_probabilities(&elitist, &population);
 
     let selection_bound = (population.len() as f64 * elitist.ratio()).floor() as usize;
     assert_probabilities(&observed, |index| {
@@ -155,9 +168,9 @@ fn elitist_selection_probabilities() {
 #[test]
 fn boltzmann_selection_probabilities() {
     // We keep the temperature constant for this test (cooling_rate = 1.0)
-    let mut boltzmann = BoltzmannSelection::new(5.0, 1.0).unwrap();
+    let boltzmann = BoltzmannSelection::new(5.0, 1.0).unwrap();
     let population = create_test_population();
-    let observed = observed_probabilities(&mut boltzmann, &population);
+    let observed = observed_probabilities(&boltzmann, &population);
 
     let scaled = |index: usize| (population[index].score / 5.0).exp();
     let total_scaled = (0..population.len()).map(scaled).sum::<f64>();
@@ -166,12 +179,9 @@ fn boltzmann_selection_probabilities() {
 
 #[test]
 fn boltzmann_selection_favors_fittest_after_cooling() {
-    let mut boltzmann = BoltzmannSelection::new(5.0, 0.9).unwrap();
+    let boltzmann = BoltzmannSelection::new(5.0, 0.9).unwrap();
     let population = create_test_population();
-    for _ in 0..100 {
-        SelectionMechanism::<MockIndividual>::prepare(&mut boltzmann, &population);
-    }
-    let observed = observed_probabilities(&mut boltzmann, &population);
+    let observed = observed_probabilities_at(&boltzmann, &population, 100);
 
     // After 100 coolings, the temperature is about 1.3e-4, and the fittest individual is
     // the only one with a non-negligible weight.
@@ -185,23 +195,27 @@ fn boltzmann_selection_favors_fittest_after_cooling() {
 }
 
 #[test]
-fn boltzmann_selection_reset_restores_the_initial_temperature() {
+fn boltzmann_selection_cools_once_per_generation_and_restarts_with_a_run() {
     let mut boltzmann = BoltzmannSelection::new(5.0, 0.5).unwrap();
-    let population = create_test_population();
-    SelectionMechanism::<MockIndividual>::prepare(&mut boltzmann, &population);
-    assert_eq!(boltzmann.temperature(), 2.5);
-
-    SelectionMechanism::<MockIndividual>::reset(&mut boltzmann);
-    assert_eq!(boltzmann.temperature(), 5.0);
+    assert_eq!(boltzmann.temperature_at(0), 5.0);
+    assert_eq!(boltzmann.temperature_at(1), 2.5);
+    assert_eq!(boltzmann.temperature_at(1), 2.5);
+    assert_eq!(boltzmann.temperature_at(3), 0.625);
+    // A new run starts again at generation zero.
+    assert_eq!(boltzmann.temperature_at(0), 5.0);
+    assert_eq!(boltzmann.temperature_at(2), 1.25);
+    // A new cooling rate applies from the initial temperature.
+    boltzmann.set_cooling_rate(0.25).unwrap();
+    assert_eq!(boltzmann.temperature_at(2), 0.3125);
 }
 
 #[test]
 fn linear_selection_probabilities() {
     let n = POPULATION_SIZE as f64;
     for pressure in [1.0, 1.25, 1.5, 2.0] {
-        let mut linear = LinearSelection::new(pressure).unwrap();
+        let linear = LinearSelection::new(pressure).unwrap();
         let population = create_test_population();
-        let observed = observed_probabilities(&mut linear, &population);
+        let observed = observed_probabilities(&linear, &population);
 
         assert_probabilities(&observed, |index| {
             ((2.0 - pressure) + 2.0 * (pressure - 1.0) * index as f64 / (n - 1.0)) / n
@@ -236,7 +250,7 @@ fn roulette_preserves_adjacent_score_differences() {
             .collect(),
     )
     .unwrap();
-    let observed = observed_probabilities(&mut RouletteWheelSelection::new(), &population);
+    let observed = observed_probabilities(&RouletteWheelSelection::new(), &population);
     assert_probabilities(&observed, |index| index as f64 / 3.0);
 }
 
@@ -247,10 +261,8 @@ fn boltzmann_scales_overflowing_differences_before_exponentiation() {
         MockIndividual { score: 1e308 },
     ])
     .unwrap();
-    let observed = observed_probabilities(
-        &mut BoltzmannSelection::new(1e308, 1.0).unwrap(),
-        &population,
-    );
+    let observed =
+        observed_probabilities(&BoltzmannSelection::new(1e308, 1.0).unwrap(), &population);
     let lower = (-2.0_f64).exp();
     assert_probabilities(&observed, |index| {
         if index == 0 {
@@ -271,12 +283,12 @@ fn boltzmann_preserves_probabilities_in_subnormal_score_units() {
             .collect(),
     )
     .unwrap();
-    let mut boltzmann = BoltzmannSelection::new(unit, 0.5).unwrap();
-    for _ in 0..2 {
-        let observed = observed_probabilities(&mut boltzmann, &population);
+    let boltzmann = BoltzmannSelection::new(unit, 0.5).unwrap();
+    for generation in 0..2 {
+        let observed = observed_probabilities_at(&boltzmann, &population, generation);
         let total = (-2.0_f64).exp() + (-1.0_f64).exp() + 1.0;
         assert_probabilities(&observed, |index| ((index as f64) - 2.0).exp() / total);
-        assert_eq!(boltzmann.temperature(), unit);
+        assert_eq!(boltzmann.temperature_at(generation), unit);
     }
 }
 
@@ -322,12 +334,12 @@ fn every_selector_uses_minimization_order() {
         ),
     ];
     for (strategy, expected) in strategies {
-        let mut selector = strategy.create_selector::<BitGenome>().unwrap();
-        selector.prepare(&population);
+        let selector = strategy.create_selector::<BitGenome>().unwrap();
+        let sampler = selector.sampler(&population, 0);
         let mut rng = Rng::from_seed(0);
         let mut counts = [0; 3];
         for _ in 0..100_000 {
-            counts[selector.select(&population, &mut rng).0] += 1;
+            counts[sampler.select(&mut rng).0] += 1;
         }
         for (index, count) in counts.into_iter().enumerate() {
             assert!(
@@ -366,12 +378,12 @@ fn every_selector_gives_equal_scores_equal_chances() {
         ),
     ];
     for (strategy, expected) in strategies {
-        let mut selector = strategy.create_selector::<BitGenome>().unwrap();
-        selector.prepare(&population);
+        let selector = strategy.create_selector::<BitGenome>().unwrap();
+        let sampler = selector.sampler(&population, 0);
         let mut rng = Rng::from_seed(0);
         let mut counts = [0; 4];
         for _ in 0..100_000 {
-            counts[selector.select(&population, &mut rng).0] += 1;
+            counts[sampler.select(&mut rng).0] += 1;
         }
         for (index, count) in counts.into_iter().enumerate() {
             assert!(
@@ -389,16 +401,39 @@ fn minimizing_roulette_handles_negative_and_extreme_native_scores() {
         ([-1e308, 0.0, 1e308], [0.0, 1.0 / 3.0, 2.0 / 3.0]),
     ] {
         let population = weighted_population(&scores, Objective::Minimize);
-        let mut selector = RouletteWheelSelection::new();
-        selector.prepare(&population);
+        let selector = RouletteWheelSelection::new();
+        let sampler = selector.sampler(&population, 0);
         let mut rng = Rng::from_seed(0);
         let mut counts = [0; 3];
         for _ in 0..100_000 {
-            counts[selector.select(&population, &mut rng).0] += 1;
+            counts[sampler.select(&mut rng).0] += 1;
         }
         for (count, expected) in counts.into_iter().zip(expected) {
             assert!((count as f64 / 100_000.0 - expected).abs() < 0.01);
         }
         assert_eq!(population.fittest().score(), scores[0]);
+    }
+}
+
+#[test]
+fn samplers_select_another_individual_by_index() {
+    let mut rng = Rng::from_seed(0);
+    let single = create_population(|_| 1.0);
+    assert_eq!(single.len(), 1);
+    let rank = RankSelection::new();
+    assert!(
+        rank.sampler(&single, 0)
+            .select_other(&mut rng, 0, 3)
+            .is_none()
+    );
+
+    let population = create_test_population();
+    let tournament = TournamentSelection::new(4).unwrap();
+    let sampler = tournament.sampler(&population, 0);
+    let fittest = population.len() - 1;
+    for _ in 0..1000 {
+        let (index, individual) = sampler.select_other(&mut rng, fittest, 100).unwrap();
+        assert_ne!(index, fittest);
+        assert_eq!(individual, &population[index]);
     }
 }

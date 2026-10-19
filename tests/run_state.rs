@@ -100,7 +100,7 @@ fn a_failed_advance_leaves_the_state_unchanged() {
     let mut state = state(vec![mock(1, 1.0)], Objective::Maximize);
     let elapsed = state.elapsed();
 
-    let result = state.advance(|population| population.replace(&mut vec![mock(2, f64::NAN)]));
+    let result = state.advance(|population| population.advance(&mut Generation::new(2)));
 
     assert_eq!(result, Err(EvolutionError::EmptyPopulation));
     assert_eq!((state.generation(), state.stagnation()), (0, 0));

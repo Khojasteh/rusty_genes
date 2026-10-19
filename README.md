@@ -178,17 +178,16 @@ Keep these in mind when you define a model:
 
 ## Customizing breeding
 
-The algorithms breed offspring through a `Reproduction`, which selects parents, applies the
-model's operators, and keeps an offspring only if its survival policy accepts it. Both parts can
-be replaced, including by your own implementations of `SelectionMechanism` and
-`SurvivalPolicy`:
+The algorithms breed each generation through a `Reproduction`, which selects parents, applies
+the model's operators to breed candidates, and lets its survival policy choose the next
+generation from the population and the candidates. Both parts can be replaced, including by
+your own implementations of `SelectionMechanism` and `SurvivalPolicy`:
 
 ```rust
 use rusty_genes::*;
 
 /// Creates a genetic algorithm for `model` that selects parents by tournaments of four, and in
-/// which every valid offspring survives, instead of only those at least as fit as their fittest
-/// parent.
+/// which every valid candidate survives, instead of competing with its parents.
 fn generational_tournament<M: EvolutionModel>(
     model: M,
 ) -> Result<GeneticAlgorithm<M>, EvolutionError> {

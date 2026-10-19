@@ -42,7 +42,7 @@ impl<I: Individual> Population<I> {
     /// Scores and statistics retain the model's original units. Individuals are sorted from
     /// worst to best and deduplicated as in [`new`](Self::new). When equal solutions have
     /// different cached scores, the better evaluation is retained. The objective remains fixed
-    /// when the population is [`replaced`](Self::replace).
+    /// when the population is [replaced](Self::replace) or [advanced](Self::advance).
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual is given.
@@ -63,12 +63,34 @@ impl<I: Individual> Population<I> {
     /// The individuals in `offspring` are normalized the same way as in [`Population::new`].
     /// Upon success, `offspring` contains the individuals that the population held before.
     ///
+    /// A [`Generation`] already holds only valid and distinct individuals, so
+    /// [`advance`](Population::advance) replaces the population with one without normalizing it
+    /// again.
+    ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if `offspring` contains no valid individual.
     /// In that case, the population is left unchanged and `offspring` is left empty.
     pub fn replace(&mut self, offspring: &mut Vec<I>) -> Result<(), EvolutionError> {
         normalize(offspring, self.objective)?;
         std::mem::swap(&mut self.individuals, offspring);
+        self.stats = OnceLock::new();
+        Ok(())
+    }
+
+    /// Replaces the current population with the individuals of `generation`, which it leaves
+    /// empty for the generation after.
+    ///
+    /// The individuals are sorted as in [`Population::new`].
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if `generation` is empty. In that case, the
+    /// population is left unchanged.
+    pub fn advance(&mut self, generation: &mut Generation<I>) -> Result<(), EvolutionError> {
+        if generation.is_empty() {
+            return Err(EvolutionError::EmptyPopulation);
+        }
+        generation.move_into(&mut self.individuals);
+        sort(&mut self.individuals, self.objective);
         self.stats = OnceLock::new();
         Ok(())
     }
@@ -141,9 +163,7 @@ fn normalize<I: Individual>(
     objective: Objective,
 ) -> Result<(), EvolutionError> {
     individuals.retain(Individual::is_valid);
-    // A stable sort keeps individuals with equal score in their given order, which keeps runs
-    // reproducible.
-    individuals.par_sort_by(|a, b| objective.cmp_fitness(a.score(), b.score()));
+    sort(individuals, objective);
     remove_duplicates(individuals);
     if individuals.is_empty() {
         Err(EvolutionError::EmptyPopulation)
@@ -152,17 +172,24 @@ fn normalize<I: Individual>(
     }
 }
 
-/// Removes duplicate individuals from a vector that is sorted by score, keeping the order of the
-/// remaining ones. Equal solutions retain their best evaluation.
+/// Sorts individuals by score from worst to best under `objective`.
+fn sort<I: Individual>(individuals: &mut [I], objective: Objective) {
+    // A stable sort keeps individuals with equal score in their given order, which keeps runs
+    // reproducible.
+    individuals.par_sort_by(|a, b| objective.cmp_fitness(a.score(), b.score()));
+}
+
+/// Removes duplicate individuals from a vector, keeping the order of the remaining ones and the
+/// last of each group of equal individuals. In a vector sorted by score, equal solutions
+/// therefore retain their best evaluation.
 ///
 /// Equal individuals have equal hashes, so only individuals with equal hashes are compared, from
-/// best to worst.
-fn remove_duplicates<I: Individual>(individuals: &mut Vec<I>) {
-    let hasher = BuildHasherDefault::<GeneHasher>::default();
+/// last to first. The individuals are hashed in parallel.
+pub(crate) fn remove_duplicates<I: Individual>(individuals: &mut Vec<I>) {
     let mut order = individuals
-        .iter()
+        .par_iter()
         .enumerate()
-        .map(|(i, individual)| (hasher.hash_one(individual), i))
+        .map(|(i, individual)| (hash_of(individual), i))
         .collect::<Vec<_>>();
     order.sort_unstable();
 
@@ -180,4 +207,10 @@ fn remove_duplicates<I: Individual>(individuals: &mut Vec<I>) {
 
     let mut keep = keep.into_iter();
     individuals.retain(|_| keep.next() == Some(true));
+}
+
+/// Returns the hash by which equal individuals are found, since they have equal hashes.
+#[inline]
+pub(crate) fn hash_of<I: Individual>(individual: &I) -> u64 {
+    BuildHasherDefault::<GeneHasher>::default().hash_one(individual)
 }

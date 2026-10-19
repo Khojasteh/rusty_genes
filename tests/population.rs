@@ -257,3 +257,32 @@ fn replace_without_valid_offspring_leaves_population_unchanged() {
     assert_eq!(population.fittest().id, 1);
     assert!(offspring.is_empty());
 }
+
+#[test]
+fn advance_sorts_a_generation_and_empties_it_for_the_next() {
+    let mut population = Population::new(vec![mock(1, 2.0)]).unwrap();
+    let mut generation = Generation::new(3);
+    for individual in [mock(2, 3.0), mock(3, 1.0), mock(4, 2.0)] {
+        assert!(generation.insert(individual));
+    }
+
+    population.advance(&mut generation).unwrap();
+    assert_eq!(
+        population.iter().map(|i| i.id).collect::<Vec<_>>(),
+        [3, 4, 2]
+    );
+    assert!(generation.is_empty());
+    assert_eq!(generation.size(), 3);
+    // The emptied generation accepts any individual again.
+    assert!(generation.insert(mock(2, 3.0)));
+}
+
+#[test]
+fn advance_with_an_empty_generation_leaves_population_unchanged() {
+    let mut population = Population::new(vec![mock(1, 1.0)]).unwrap();
+
+    let result = population.advance(&mut Generation::new(2));
+
+    assert_eq!(result, Err(EvolutionError::EmptyPopulation));
+    assert_eq!(population.fittest().id, 1);
+}

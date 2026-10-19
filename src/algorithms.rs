@@ -70,25 +70,24 @@ pub trait EvolutionAlgorithm {
     fn prepare_generation(&mut self, state: &RunState<IndividualOf<Self>>);
 
     /// Carries the elite individuals of `population` over to the next generation by adding them
-    /// to `elites`.
+    /// to `elites`, which is empty and holds at most
+    /// [`population_size`](EvolutionAlgorithm::population_size) individuals.
     ///
     /// # Note
     /// The default implementation adds the fittest individual.
     fn select_elites(
         &self,
         population: &Population<IndividualOf<Self>>,
-        elites: &mut Vec<IndividualOf<Self>>,
+        elites: &mut Generation<IndividualOf<Self>>,
     ) {
-        elites.push(population.fittest().clone());
+        elites.insert(population.fittest().clone());
     }
 
-    /// Breeds new individuals from the population of `state` and adds them to `offspring` until
-    /// it holds [`population_size`](EvolutionAlgorithm::population_size) individuals.
+    /// Breeds new individuals from the population of `state` and adds them to `offspring`, up
+    /// to its [size](Generation::size), which is the
+    /// [`population_size`](EvolutionAlgorithm::population_size).
     ///
-    /// # Arguments
-    /// * `state` - The state of the run, which holds the current population.
-    /// * `offspring` - The individuals of the next generation, which may already hold its elites.
-    /// * `rng` - A mutable reference to the random number generator of the run.
+    /// `offspring` may already hold elites; add only as many individuals as its capacity allows.
     ///
     /// # Note
     /// For a run to be reproducible from its seed, the offspring must depend only on the state
@@ -97,26 +96,26 @@ pub trait EvolutionAlgorithm {
     fn generate_offspring(
         &self,
         state: &RunState<IndividualOf<Self>>,
-        offspring: &mut Vec<IndividualOf<Self>>,
+        offspring: &mut Generation<IndividualOf<Self>>,
         rng: &mut Rng,
     );
 
-    /// Replaces the current population with the new generation in `offspring`.
+    /// Replaces the current population with the next generation in `offspring`.
     ///
     /// # Note
-    /// The default implementation replaces the whole population by [`Population::replace`].
+    /// The default implementation replaces the whole population by [`Population::advance`].
     /// [`Evolution`] records the new generation in the [`RunState`] of the run once the
     /// population is replaced.
     ///
     /// # Errors
-    /// Returns [`EvolutionError::EmptyPopulation`] if the new generation has no valid individual.
+    /// Returns [`EvolutionError::EmptyPopulation`] if the next generation is empty.
     #[inline]
     fn replace_population(
         &self,
         population: &mut Population<IndividualOf<Self>>,
-        offspring: &mut Vec<IndividualOf<Self>>,
+        offspring: &mut Generation<IndividualOf<Self>>,
     ) -> Result<(), EvolutionError> {
-        population.replace(offspring)
+        population.advance(offspring)
     }
 }
 
@@ -128,7 +127,13 @@ fn elite_count(population_size: usize, elitism_rate: f64) -> usize {
 
 /// Adds up to `count` of the fittest individuals of `population` to `elites`.
 #[inline]
-fn select_fittest<I: Individual>(population: &Population<I>, count: usize, elites: &mut Vec<I>) {
+fn select_fittest<I: Individual>(
+    population: &Population<I>,
+    count: usize,
+    elites: &mut Generation<I>,
+) {
     let start = population.len().saturating_sub(count);
-    elites.extend_from_slice(&population[start..]);
+    for elite in &population[start..] {
+        elites.insert(elite.clone());
+    }
 }

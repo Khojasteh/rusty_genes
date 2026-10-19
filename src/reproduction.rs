@@ -4,19 +4,17 @@ use rayon::prelude::*;
 /// The number of attempts to select a second parent distinct from the first one.
 const DISTINCT_PARENT_TRIES: usize = 3;
 
-/// Breeds the offspring of a population: it selects parents, combines and varies them with the
-/// operators of an [`EvolutionModel`], and decides by a [`SurvivalPolicy`] whether an offspring
-/// or its fittest parent passes on to the next generation.
+/// Breeds the next generation of a population: it selects parents, combines and varies them with
+/// the operators of an [`EvolutionModel`] into candidates, and lets a [`SurvivalPolicy`] choose
+/// the next generation from the population and the candidates.
 ///
 /// # Note
-/// Each offspring is bred as follows:
+/// Each candidate is bred as follows:
 /// 1. A parent is selected and, with the probability of the crossover rate, a second distinct
-///    parent is selected to cross over with. Without a second parent, the offspring is a copy of
+///    parent is selected to cross over with. Without a second parent, the candidate is a copy of
 ///    the first one.
-/// 2. With the probability of the mutation rate, the offspring is mutated.
-/// 3. The offspring is improved and evaluated.
-/// 4. If the offspring is valid and survives by the survival policy, it is the result;
-///    otherwise, the fittest parent is (keep-best reproduction).
+/// 2. With the probability of the mutation rate, the candidate is mutated.
+/// 3. The candidate is improved and evaluated.
 ///
 /// A new reproduction uses the [`FamilyCompetition`] survival policy.
 pub struct Reproduction<I: Individual> {
@@ -31,8 +29,8 @@ impl<I: Individual> Reproduction<I> {
     ///
     /// # Arguments
     /// * `selector` - The mechanism that selects parents.
-    /// * `crossover_rate` - The probability of an offspring having two parents.
-    /// * `mutation_rate` - The probability of an offspring being mutated.
+    /// * `crossover_rate` - The probability of a candidate having two parents.
+    /// * `mutation_rate` - The probability of a candidate being mutated.
     ///
     /// # Errors
     /// Returns [`EvolutionError::InvalidParameter`] unless both rates are between 0.0 and 1.0,
@@ -88,13 +86,13 @@ impl<I: Individual> Reproduction<I> {
         self.survival = Box::new(survival);
     }
 
-    /// Returns the probability of an offspring having two parents.
+    /// Returns the probability of a candidate having two parents.
     #[inline]
     pub fn crossover_rate(&self) -> f64 {
         self.crossover_rate
     }
 
-    /// Returns the probability of an offspring being mutated.
+    /// Returns the probability of a candidate being mutated.
     #[inline]
     pub fn mutation_rate(&self) -> f64 {
         self.mutation_rate
@@ -116,106 +114,173 @@ impl<I: Individual> Reproduction<I> {
         Ok(())
     }
 
-    /// Restores the state the parent selector adapts during a run, for a new run.
+    /// Returns the mechanism that selects parents.
     #[inline]
-    pub fn reset(&mut self) {
-        self.selector.reset();
+    pub fn selector(&self) -> &dyn SelectionMechanism<I> {
+        &*self.selector
     }
 
-    /// Prepares the parent selector for breeding from `population`.
-    ///
-    /// # Note
-    /// This method must be called for each new population before breeding from it.
-    #[inline]
-    pub fn prepare(&mut self, population: &Population<I>) {
-        self.selector.prepare(population);
-    }
-
-    /// Breeds one offspring from `population`.
+    /// Breeds and evaluates one candidate, recording its parents' indices in the population.
     ///
     /// # Arguments
-    /// * `model` - The model whose operators create, vary, and evaluate the offspring.
-    /// * `population` - The population to select parents from. It must be the population the
-    ///   reproduction was last prepared for.
+    /// * `model` - The model whose operators create, vary, and evaluate the candidate.
+    /// * `parents` - The sampler of the parent selector for the population to breed from, as
+    ///   created by [`SelectionMechanism::sampler`].
     /// * `rng` - A mutable reference to a random number generator.
     ///
-    /// # Returns
-    /// The evaluated offspring, or the fittest parent if the offspring is invalid or does not
-    /// survive.
-    pub fn breed<M>(&self, model: &M, population: &Population<I>, rng: &mut Rng) -> I
+    /// The returned candidate may be invalid. This method applies no survival policy; its
+    /// caller decides whether the candidate or a parent joins the next generation.
+    pub fn breed<'a, M>(
+        &self,
+        model: &M,
+        parents: &dyn Sampler<'a, I>,
+        rng: &mut Rng,
+    ) -> Candidate<I>
     where
         M: EvolutionModel<Individual = I> + ?Sized,
+        I: 'a,
     {
-        let (_, parent1) = self.selector.select(population, rng);
-        let parent2 = if population.len() > 1 && rng.random_bool(self.crossover_rate) {
-            self.selector
-                .select_distinct(population, rng, DISTINCT_PARENT_TRIES, parent1)
-                .map(|(_, parent)| parent)
+        let population = parents.population();
+        let (first, parent1) = parents.select(rng);
+        let second = if population.len() > 1 && rng.random_bool(self.crossover_rate) {
+            parents.select_other(rng, first, DISTINCT_PARENT_TRIES)
         } else {
             None
         };
 
-        let mut fittest_parent = parent1;
-        let mut offspring = if let Some(parent2) = parent2 {
-            if population
-                .objective()
-                .is_fitter(parent2.score(), parent1.score())
-            {
-                fittest_parent = parent2;
+        let (mut individual, fittest_parent, other_parent) = match second {
+            Some((second, parent2)) => {
+                let child = model.crossover(parent1, parent2, rng);
+                if population
+                    .objective()
+                    .is_fitter(parent2.score(), parent1.score())
+                {
+                    (child, second, Some(first))
+                } else {
+                    (child, first, Some(second))
+                }
             }
-            model.crossover(parent1, parent2, rng)
-        } else {
-            parent1.clone()
+            None => (parent1.clone(), first, None),
         };
 
         if rng.random_bool(self.mutation_rate) {
-            model.mutate(&mut offspring, rng);
+            model.mutate(&mut individual, rng);
         }
 
-        model.improve(&mut offspring, rng);
-        model.evaluate(&mut offspring);
+        model.improve(&mut individual, rng);
+        model.evaluate(&mut individual);
 
-        if offspring.is_valid()
-            && self
-                .survival
-                .survives(&offspring, fittest_parent, population, rng)
-        {
-            offspring
-        } else {
-            fittest_parent.clone()
+        Candidate {
+            individual,
+            fittest_parent,
+            other_parent,
         }
     }
 
-    /// Breeds offspring from `population` in parallel and adds them to `offspring` until it holds
-    /// `size` individuals.
+    /// Breeds candidates in parallel, then lets the survival policy fill `next`.
     ///
     /// # Arguments
-    /// * `model` - The model whose operators create, vary, and evaluate the offspring.
-    /// * `population` - The population to select parents from. It must be the population the
-    ///   reproduction was last prepared for.
-    /// * `offspring` - The individuals of the next generation, which may already hold its elites.
-    /// * `size` - The number of individuals of the next generation.
+    /// * `model` - The model whose operators create, vary, and evaluate the candidates.
+    /// * `state` - The state of the run, whose population parents are selected from by a
+    ///   sampler the selector creates for its generation.
+    /// * `next` - The next generation, which may already hold its elites.
     /// * `rng` - A mutable reference to a random number generator.
     ///
     /// # Note
-    /// Each offspring is bred with its own generator of [`Rng::split`], so the result depends
-    /// only on the state of `rng`, not on how the work is scheduled on threads.
+    /// As many candidates are bred as `next` lacks individuals to its
+    /// [size](Generation::size), and the survival policy chooses the rest of the next
+    /// generation from the population and the candidates. A generation holds only valid and
+    /// distinct individuals, so `next` stays smaller than its size when the policy finds no more
+    /// of them, such as when the problem has fewer solutions than the size.
+    ///
+    /// The candidates are bred in parallel, each with its own generator of [`Rng::split`], and
+    /// the survival policy receives them in the order of those generators, with a generator of
+    /// its own. The result therefore depends only on the state of `rng`, not on how the work is
+    /// scheduled on threads, as long as the policy depends only on what it receives.
     pub fn breed_into<M>(
         &self,
         model: &M,
-        population: &Population<I>,
-        offspring: &mut Vec<I>,
-        size: usize,
+        state: &RunState<I>,
+        next: &mut Generation<I>,
         rng: &mut Rng,
     ) where
         M: EvolutionModel<Individual = I> + ?Sized,
     {
-        let count = size.saturating_sub(offspring.len());
+        let population = state.population();
+        let parents = self.selector.sampler(population, state.generation());
+        let count = next.size().saturating_sub(next.len());
         let streams = rng.split();
-        offspring.par_extend((0..count).into_par_iter().map(|index| {
-            let mut rng = streams.rng(index as u64);
-            self.breed(model, population, &mut rng)
-        }));
+        let candidates = (0..count)
+            .into_par_iter()
+            .map(|index| self.breed(model, &*parents, &mut streams.rng(index as u64)))
+            .collect();
+        self.survival.select_survivors(
+            population,
+            candidates,
+            next,
+            &mut streams.rng(count as u64),
+        );
+    }
+}
+
+/// An individual bred as a candidate for the next generation, by a [`Reproduction`] or a custom
+/// breeding step, with the parents it was bred from.
+#[derive(Debug, Clone)]
+pub struct Candidate<I: Individual> {
+    individual: I,
+    fittest_parent: usize,
+    other_parent: Option<usize>,
+}
+
+impl<I: Individual> Candidate<I> {
+    /// Creates a candidate for the next generation of a population, bred from the individuals at
+    /// the given indices of that population.
+    ///
+    /// # Arguments
+    /// * `individual` - The evaluated individual, which may be invalid.
+    /// * `fittest_parent` - The index of the parent it was copied from, or of the fitter of the
+    ///   two parents it was bred from.
+    /// * `other_parent` - The index of the other parent of a candidate bred from two parents, or
+    ///   [`None`] for a candidate copied from one parent.
+    ///
+    /// A custom breeding step creates its candidates by this function, so that a
+    /// [`SurvivalPolicy`] can choose the next generation from them. [`FamilyCompetition`] and
+    /// [`PlaceCompetition`] compare a candidate with its fittest parent, and panic if
+    /// `fittest_parent` is not an index of the population.
+    #[inline]
+    pub fn new(individual: I, fittest_parent: usize, other_parent: Option<usize>) -> Self {
+        Self {
+            individual,
+            fittest_parent,
+            other_parent,
+        }
+    }
+
+    /// Returns the evaluated individual, which may be invalid.
+    #[inline]
+    pub fn individual(&self) -> &I {
+        &self.individual
+    }
+
+    /// Returns the index in the population of the fittest parent of the candidate: the parent
+    /// it was copied from, or the fitter of the two parents it was bred from, or the first one
+    /// when they are equally fit.
+    #[inline]
+    pub fn fittest_parent(&self) -> usize {
+        self.fittest_parent
+    }
+
+    /// Returns the index in the population of the other parent of a candidate bred from two
+    /// parents, or [`None`] for a candidate copied from one parent.
+    #[inline]
+    pub fn other_parent(&self) -> Option<usize> {
+        self.other_parent
+    }
+
+    /// Returns the evaluated individual, consuming the candidate.
+    #[inline]
+    pub fn into_individual(self) -> I {
+        self.individual
     }
 }
 
