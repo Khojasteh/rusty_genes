@@ -14,21 +14,21 @@ use super::*;
 #[non_exhaustive]
 pub enum SelectionStrategy {
     /// The tournament selection strategy runs a "tournament" among a few individuals chosen at
-    /// random from the population and selects the winner (the one with the best fitness). The
+    /// random from the population and selects the winner (the one with the best score). The
     /// parameter is the number of individuals in a tournament. See [`TournamentSelection`].
     Tournament(usize /* size */),
 
-    /// The roulette wheel selection strategy selects individuals with a probability proportional
-    /// to their fitness, like spinning a roulette wheel. See [`RouletteWheelSelection`].
+    /// Selects proportionally to score-derived weights, accounting for negative scores and
+    /// minimization. See [`RouletteWheelSelection`].
     RouletteWheel,
 
     /// The Boltzmann selection strategy selects individuals with a probability that is a function
-    /// of their fitness and a decreasing "temperature". The first parameter is the initial
+    /// of their score and a decreasing "temperature". The first parameter is the initial
     /// temperature, and the second one is the cooling rate. See [`BoltzmannSelection`].
     Boltzmann(f64 /* temperature */, f64 /* cooling rate */),
 
     /// The rank selection strategy selects individuals with a probability proportional to their
-    /// rank in the population when sorted by fitness. See [`RankSelection`].
+    /// rank in the population sorted from worst to best. See [`RankSelection`].
     Rank,
 
     /// The linear selection strategy selects individuals with a probability that is a linear
@@ -83,6 +83,8 @@ impl SelectionStrategy {
 ///
 /// The mechanism is shared by the threads that breed offspring in parallel, and it is part of
 /// algorithms that may be moved to other threads, so it must be [`Send`] and [`Sync`].
+/// Populations are ordered from worst to best. A custom mechanism comparing numerical scores
+/// directly must respect [`Population::objective`].
 pub trait SelectionMechanism<I: Individual>: Send + Sync {
     /// Restores the state the mechanism adapts during a run, for a new run.
     ///
@@ -209,7 +211,7 @@ impl WeightedIndex {
 ///
 /// # Note
 /// The tournament selection method draws a fixed number of random candidates from the
-/// population, with replacement, and selects the candidate with the highest fitness.
+/// population, with replacement, and selects the best candidate under its objective.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TournamentSelection {
     size: usize,
@@ -263,7 +265,7 @@ impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
 
     #[inline]
     fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        // The population is sorted by fitness, so the highest index wins the tournament.
+        // The population is sorted from worst to best, so the highest index wins the tournament.
         let index = (0..self.size)
             .map(|_| self.indices.sample(population.len(), rng))
             .max()
@@ -272,17 +274,15 @@ impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
     }
 }
 
-/// Represents the roulette-wheel selection algorithm used in genetic algorithms.
+/// Selects proportionally to non-negative weights derived from scores and the objective.
 ///
-/// # Note
-/// The roulette wheel selection method selects an individual with a probability proportional to
-/// its fitness score.
-///
-/// Fitness-proportionate selection is defined for non-negative fitness scores only. If the
-/// population has a negative fitness score, the scores are shifted by the lowest one, so the
+/// Score-proportionate selection is defined for non-negative scores only. If the
+/// population has a negative score, the scores are shifted by the lowest one, so the
 /// probabilities become proportional to the distance from the least fit individual, which is
-/// never selected unless all individuals have the same fitness. If all weights are zero, every
+/// never selected unless all individuals have the same score. If all weights are zero, every
 /// individual is equally likely to be selected.
+/// For minimization the same rule is applied to the negated scores internally: weights are
+/// proportional to `max(0, maximum score) - score`. Stored scores are unchanged.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RouletteWheelSelection {
     weights: WeightedIndex,
@@ -298,9 +298,13 @@ impl RouletteWheelSelection {
 impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        let offset = population.stats().min().min(0.0);
-        self.weights
-            .rebuild(population.iter().map(|i| i.fitness() - offset));
+        let objective = population.objective();
+        let offset = objective.as_maximized(population[0].score()).min(0.0);
+        self.weights.rebuild(
+            population
+                .iter()
+                .map(|i| objective.as_maximized(i.score()) - offset),
+        );
     }
 
     #[inline]
@@ -313,14 +317,16 @@ impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
 /// Represents the Boltzmann selection algorithm used in genetic algorithms.
 ///
 /// # Note
-/// In Boltzmann selection, the probability of selecting an individual with fitness `f` is
+/// In Boltzmann selection, the probability of selecting an individual with score `f` is
 /// proportional to `exp(f / T)`, where `T` is the temperature. A high temperature makes the
 /// probabilities more uniform, which encourages exploration, while a low temperature favors the
 /// fittest individuals, which encourages exploitation.
+/// For minimization probabilities are proportional to `exp(-f / T)`, using the score in its
+/// original units. The temperature therefore has the same units as the score.
 ///
 /// The first population of a run is selected from at the initial temperature, and the
-/// temperature is multiplied by the cooling rate after each population. The weights are computed relative to
-/// the fittest individual, so they cannot overflow at any temperature.
+/// temperature is multiplied by the cooling rate after each population. The weights are computed
+/// relative to the fittest individual, so they cannot overflow at any temperature.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoltzmannSelection {
     initial_temperature: f64,
@@ -406,13 +412,14 @@ impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
 
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        // exp((f - f_max) / T) is proportional to exp(f / T) and lies in (0, 1].
+        // Subtracting the best score gives non-positive exponents in either direction.
         let temperature = self.temperature.max(f64::MIN_POSITIVE);
-        let max_fitness = population.stats().max();
+        let objective = population.objective();
+        let best = objective.as_maximized(population.fittest().score());
         self.weights.rebuild(
             population
                 .iter()
-                .map(|i| ((i.fitness() - max_fitness) / temperature).exp()),
+                .map(|i| ((objective.as_maximized(i.score()) - best) / temperature).exp()),
         );
         self.temperature = (self.temperature * self.cooling_rate).max(f64::MIN_POSITIVE);
     }
@@ -428,7 +435,7 @@ impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
 ///
 /// # Note
 /// In rank selection, the probability of selecting an individual is proportional to its rank
-/// in the population sorted by fitness, where the least fit individual has rank 1 and the
+/// in the population sorted by score, where the least fit individual has rank 1 and the
 /// fittest has rank `n`.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RankSelection {
@@ -445,7 +452,7 @@ impl RankSelection {
 impl<I: Individual> SelectionMechanism<I> for RankSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        // The population is sorted by the fitness of individuals.
+        // The population is sorted from worst to best.
         self.weights
             .rebuild((1..=population.len()).map(|rank| rank as f64));
     }
@@ -507,7 +514,6 @@ impl ElitistSelection {
 impl<I: Individual> SelectionMechanism<I> for ElitistSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        // The population is sorted by the fitness of individuals.
         let selection_bound = interpolate_usize(0, population.len(), self.ratio);
         self.indices.prepare(selection_bound, population.len());
     }
@@ -578,7 +584,7 @@ impl LinearSelection {
 impl<I: Individual> SelectionMechanism<I> for LinearSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        // The population is sorted by the fitness of individuals.
+        // The population is sorted from worst to best.
         let n = population.len();
         let last = n.saturating_sub(1).max(1) as f64;
         let s = self.pressure;
@@ -599,12 +605,12 @@ mod tests {
 
     #[derive(Debug, Clone, Copy, PartialEq)]
     struct MockIndividual {
-        fitness: f64,
+        score: f64,
     }
 
     impl Individual for MockIndividual {
-        fn fitness(&self) -> f64 {
-            self.fitness
+        fn score(&self) -> f64 {
+            self.score
         }
     }
 
@@ -612,11 +618,9 @@ mod tests {
     const ITERATIONS: usize = 100000;
     const CONFIDENCE: f64 = 0.01;
 
-    fn create_population(fitness: impl Fn(usize) -> f64) -> Population<MockIndividual> {
+    fn create_population(score: impl Fn(usize) -> f64) -> Population<MockIndividual> {
         (0..POPULATION_SIZE)
-            .map(|i| MockIndividual {
-                fitness: fitness(i),
-            })
+            .map(|i| MockIndividual { score: score(i) })
             .collect::<Vec<_>>()
             .try_into()
             .unwrap()
@@ -676,26 +680,26 @@ mod tests {
         let population = create_test_population();
         let observed = observed_probabilities(&mut roulette_wheel, &population);
 
-        let total_fitness = population.iter().map(|i| i.fitness).sum::<f64>();
-        assert_probabilities(&observed, |index| population[index].fitness / total_fitness);
+        let total_score = population.iter().map(|i| i.score).sum::<f64>();
+        assert_probabilities(&observed, |index| population[index].score / total_score);
     }
 
     #[test]
-    fn test_roulette_wheel_selection_with_negative_fitness() {
+    fn test_roulette_wheel_selection_with_negative_score() {
         let mut roulette_wheel = RouletteWheelSelection::new();
         let population = create_population(|i| i as f64 - 20.0);
         let observed = observed_probabilities(&mut roulette_wheel, &population);
 
-        // The fitness scores are shifted by the lowest one, -20.
+        // The scores are shifted by the lowest one, -20.
         let total_shifted = (0..POPULATION_SIZE).sum::<usize>() as f64;
         assert_probabilities(&observed, |index| index as f64 / total_shifted);
     }
 
     #[test]
-    fn test_roulette_wheel_selection_with_zero_fitness() {
+    fn test_roulette_wheel_selection_with_zero_score() {
         let mut roulette_wheel = RouletteWheelSelection::new();
         let population: Population<MockIndividual> =
-            vec![MockIndividual { fitness: 0.0 }].try_into().unwrap();
+            vec![MockIndividual { score: 0.0 }].try_into().unwrap();
         let observed = observed_probabilities(&mut roulette_wheel, &population);
 
         assert_probabilities(&observed, |_| 1.0);
@@ -734,7 +738,7 @@ mod tests {
         let population = create_test_population();
         let observed = observed_probabilities(&mut boltzmann, &population);
 
-        let scaled = |index: usize| (population[index].fitness / 5.0).exp();
+        let scaled = |index: usize| (population[index].score / 5.0).exp();
         let total_scaled = (0..population.len()).map(scaled).sum::<f64>();
         assert_probabilities(&observed, |index| scaled(index) / total_scaled);
     }

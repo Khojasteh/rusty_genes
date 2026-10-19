@@ -81,14 +81,6 @@ impl Hasher for GeneHasher {
     }
 }
 
-/// Compares two individuals by their fitness scores.
-///
-/// The comparison is a total order that follows [`f64::total_cmp`].
-#[inline]
-pub fn compare_fitness<I: Individual>(a: &I, b: &I) -> std::cmp::Ordering {
-    a.fitness().total_cmp(&b.fitness())
-}
-
 /// Returns a distinct random pair of numbers within the range `[0, n)`.
 ///
 /// # Arguments

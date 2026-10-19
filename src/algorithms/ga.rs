@@ -90,13 +90,10 @@ impl GeneticAlgorithmParameters {
     }
 }
 
-/// A genetic algorithm for evolving populations towards better fitness values.
-///
-/// # Note
-/// This algorithm keeps its crossover and mutation rates fixed throughout the evolution process.
+/// A genetic algorithm with crossover and mutation probabilities fixed for the whole run.
 ///
 /// The algorithm operates on an [`EvolutionModel`], which defines the problem-specific
-/// components such as the crossover and mutation operators, and the fitness function.
+/// components such as the crossover and mutation operators, and the score function.
 ///
 /// The algorithm breeds its offspring by a [`Reproduction`], whose parent selector and survival
 /// policy can be replaced through [`reproduction_mut`](GeneticAlgorithm::reproduction_mut).
@@ -123,7 +120,7 @@ impl GeneticAlgorithmParameters {
 /// let limits = Limits::new().generations(200);
 /// let solution = ga
 ///     .run(&ONE_MAX_LENGTH, |state| {
-///         if state.fittest_so_far().fitness() < 1.0 {
+///         if state.fittest_so_far().score() < ONE_MAX_LENGTH as f64 {
 ///             limits.check(state)
 ///         } else {
 ///             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
@@ -131,7 +128,7 @@ impl GeneticAlgorithmParameters {
 ///     })?
 ///     .into_fittest_so_far();
 ///
-/// assert!(solution.genome().iter().all(|&one| one));
+/// println!("Best score: {} of {}", solution.score(), ONE_MAX_LENGTH);
 /// # Ok::<(), EvolutionError>(())
 /// ```
 pub struct GeneticAlgorithm<M: EvolutionModel> {

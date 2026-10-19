@@ -205,8 +205,10 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
         let mut rng = self.new_rng();
         let algorithm = &mut self.algorithm;
         algorithm.start_run();
-        let initial_population = starting_individuals(algorithm, &mut rng);
-        let population = algorithm.initialize_population(initial_population)?;
+        let mut initial_population = starting_individuals(algorithm, &mut rng);
+        algorithm.evaluate_initial(&mut initial_population);
+        let population =
+            Population::with_objective(initial_population, algorithm.model().objective())?;
         let mut state = RunState::started_at(population, started);
         let mut offspring = Vec::with_capacity(algorithm.population_size());
 

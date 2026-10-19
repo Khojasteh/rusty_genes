@@ -121,13 +121,13 @@ fn check_probability_range(
     Ok(())
 }
 
-/// An adaptive genetic algorithm for evolving populations towards better fitness values.
+/// An adaptive genetic algorithm for evolving populations towards better score values.
 ///
 /// # Note
 /// This algorithm adjusts its crossover and mutation rates to the diversity of the population,
 /// with the goal of balancing exploration and exploitation.
 ///
-/// The diversity is the standard deviation of the fitness scores of the current generation
+/// The diversity is the standard deviation of the scores of the current generation
 /// relative to that of the initial generation, limited to the range 0.0 to 1.0. When the
 /// initial generation has no spread at all, the first spread observed later becomes the
 /// reference. When diversity is high, the algorithm increases the crossover rate and decreases
@@ -135,7 +135,7 @@ fn check_probability_range(
 /// low, it decreases the crossover rate and increases the mutation rate, which encourages
 /// exploration by introducing more diversity into the population.
 /// The spread ratio is computed using scaled statistics so it remains usable even when the
-/// standard deviations of the fitness scores would overflow.
+/// standard deviations in the score's units would overflow.
 ///
 /// The rates start at the highest crossover rate and the lowest mutation rate, and are adjusted
 /// at the configured interval. The algorithm breeds its offspring by a [`Reproduction`], whose
@@ -144,7 +144,7 @@ fn check_probability_range(
 /// sets replace any rates set there.
 ///
 /// The algorithm operates on an [`EvolutionModel`], which defines the problem-specific
-/// components such as the crossover and mutation operators, and the fitness function.
+/// components such as the crossover and mutation operators, and the score function.
 ///
 /// # Example
 /// ```
@@ -162,7 +162,7 @@ fn check_probability_range(
 /// let limits = Limits::new().generations(200);
 /// let solution = aga
 ///     .run(&ONE_MAX_LENGTH, |state| {
-///         if state.fittest_so_far().fitness() < 1.0 {
+///         if state.fittest_so_far().score() < ONE_MAX_LENGTH as f64 {
 ///             limits.check(state)
 ///         } else {
 ///             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
@@ -170,7 +170,7 @@ fn check_probability_range(
 ///     })?
 ///     .into_fittest_so_far();
 ///
-/// assert!(solution.genome().iter().all(|&one| one));
+/// println!("Best score: {} of {}", solution.score(), ONE_MAX_LENGTH);
 /// # Ok::<(), EvolutionError>(())
 /// ```
 pub struct AdaptiveGeneticAlgorithm<M: EvolutionModel> {
