@@ -117,7 +117,8 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     /// individual of any generation, and the reason it stopped.
     ///
     /// # Errors
-    /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual could be generated.
+    /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual could be generated, or
+    /// if a generation ends up with no valid individual.
     /// Returns [`EvolutionError::InvalidParameter`] if the model's goal score is not finite.
     pub fn run<T, F>(
         &mut self,
@@ -149,7 +150,7 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if the initial population has no valid
-    /// individual.
+    /// individual, or if a generation ends up with no valid individual.
     /// Returns [`EvolutionError::InvalidParameter`] if the model's goal score is not finite.
     ///
     /// # Note

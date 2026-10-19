@@ -54,3 +54,10 @@ fn crossover_of_empty_genomes_is_empty() {
         );
     }
 }
+
+#[test]
+#[should_panic(expected = "permutations of the same genes")]
+fn partially_mapped_crossover_rejects_parents_that_are_not_permutations_of_each_other() {
+    // The mapping of the copied range leads `true` back to itself, so it never ends.
+    partially_mapped_crossover(&[true, false], &[true, true], 0..1);
+}
