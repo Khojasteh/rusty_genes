@@ -4,7 +4,8 @@ use std::{hash::Hash, ops::Range};
 /// Defines various crossover strategies for combining genetic information of two individuals.
 ///
 /// These strategies are mainly applicable to permutation-based problems where each gene in a
-/// genome represents a unique element of the solution.
+/// genome represents a unique element of the solution. For genomes in which genes repeat, see
+/// [`crossover_with_repetition`](CrossoverStrategy::crossover_with_repetition).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CrossoverStrategy {
@@ -98,6 +99,56 @@ impl CrossoverStrategy {
                 single_point_crossover(parent1, parent2, point)
             }
         }
+    }
+
+    /// Combines equal-length parents by distinguishing repeated genes by their occurrence order.
+    ///
+    /// The copies of a gene are told apart by their order: the k-th copy of a gene in one parent
+    /// stands for its k-th copy in the other, and the strategy combines the parents as if the
+    /// copies were distinct genes. This suits genomes in which that order has a meaning, such as
+    /// a schedule in which the k-th copy of a job is its k-th operation. The strategies that
+    /// follow neighboring genes, such as edge recombination and common partition crossover, see
+    /// neighbors between copies rather than between genes: parents in which the same two genes
+    /// are neighbors through different copies do not share that pair of neighbors.
+    ///
+    /// Without repeated genes, the offspring is the one [`crossover`](Self::crossover) produces
+    /// from the same state of `rng`.
+    ///
+    /// The offspring has the parents' length. For permutation strategies, the parents must
+    /// contain the same number of copies of every gene. Single-point crossover does not
+    /// preserve those counts.
+    ///
+    /// # Panics
+    /// Panics if the parent genomes have different lengths. Strategies other than
+    /// single-point crossover may also panic if the parents do not have the same genes, each
+    /// repeated the same number of times.
+    ///
+    /// # Example
+    /// ```
+    /// use rusty_genes::*;
+    ///
+    /// // Three jobs of two operations each, in the order that two schedules process them.
+    /// let parent1 = vec![0, 0, 1, 1, 2, 2];
+    /// let parent2 = vec![2, 1, 0, 2, 1, 0];
+    ///
+    /// let mut offspring = CrossoverStrategy::Order.crossover_with_repetition(
+    ///     &parent1,
+    ///     &parent2,
+    ///     &mut Rng::from_seed(1),
+    /// );
+    ///
+    /// // The offspring schedules every operation of every job.
+    /// offspring.sort_unstable();
+    /// assert_eq!(offspring, parent1);
+    /// ```
+    pub fn crossover_with_repetition<G: Copy + PartialOrd + Eq + Hash>(
+        &self,
+        parent1: &[G],
+        parent2: &[G],
+        rng: &mut Rng,
+    ) -> Vec<G> {
+        let offspring = self.crossover(&numbered(parent1), &numbered(parent2), rng);
+        offspring.into_iter().map(|(gene, _)| gene).collect()
     }
 }
 
@@ -634,6 +685,19 @@ where
         offspring[point..].copy_from_slice(&parent2[point..]);
     }
     offspring
+}
+
+/// Pairs each gene of `genome` with the number of its copies before it.
+fn numbered<G: Copy + Eq + Hash>(genome: &[G]) -> Vec<(G, usize)> {
+    let mut copies = GeneMap::with_capacity_and_hasher(genome.len(), Default::default());
+    genome
+        .iter()
+        .map(|&gene| {
+            let copy = copies.entry(gene).or_insert(0);
+            *copy += 1;
+            (gene, *copy - 1)
+        })
+        .collect()
 }
 
 /// Maps each gene of `genome` to the position of its first occurrence.
