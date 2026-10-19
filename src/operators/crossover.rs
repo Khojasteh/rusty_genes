@@ -8,12 +8,11 @@ use std::{hash::Hash, ops::Range};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CrossoverStrategy {
-    /// Generalized Partition Crossover 2 (GPX2) is a permutation-based method that identifies common
-    /// sequences of genes appearing in the same order (partitions) in the parent genomes. It then
-    /// builds a graph where the nodes represent these common partitions, and the edges represent
-    /// possible transitions between these partitions. This graph is used to generate offspring
-    /// genomes, preserving the common partitions from the parents and exploring new combinations of
-    /// these partitions.
+    /// Generalized Partition Crossover 2 (GPX2) is a permutation-based method that identifies the
+    /// partitions of the parent genomes: chains of genes that are neighbors in both parents. The
+    /// offspring keeps every partition intact and joins the partitions in a random order, so it
+    /// preserves the structure the parents share while exploring new combinations of it. See
+    /// [`generalized_partition_2_crossover`] to choose the order of the partitions.
     GeneralizedPartition2,
 
     /// Sequential Constructive Crossover (SCX) is a permutation-based method that selects the best
@@ -61,7 +60,9 @@ impl CrossoverStrategy {
     /// the same as the parents' genomes.
     ///
     /// # Panics
-    /// This method will panic if the parent genomes have different lengths.
+    /// Panics if the parent genomes have different lengths. Strategies other than
+    /// single-point crossover may also panic if the parents are not permutations of the same
+    /// genes.
     pub fn crossover<G: Copy + PartialOrd + Eq + Hash>(
         &self,
         parent1: &[G],
@@ -409,7 +410,8 @@ where
 /// PMX is applicable to permutation-based problems.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// This method will panic if the parent genomes have different lengths, or if the genes of
+/// `range` cannot be mapped because the parents are not permutations of the same genes.
 ///
 /// # Example
 /// ```
@@ -445,7 +447,15 @@ where
     for (i, gene) in offspring.iter_mut().enumerate() {
         if !range.contains(&i) {
             let mut mapped_gene = parent2[i];
+            // Between permutations of the same genes, the mapping leaves the range within as
+            // many steps as the range has genes; otherwise it can return to a gene forever.
+            let mut steps = 0;
             while let Some(pos) = start.get(&mapped_gene) {
+                steps += 1;
+                assert!(
+                    steps <= end.len(),
+                    "the parents should be permutations of the same genes"
+                );
                 mapped_gene = end[pos];
             }
             *gene = mapped_gene
@@ -548,7 +558,8 @@ where
 /// CX is applicable to permutation-based problems.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// This method will panic if the parent genomes have different lengths, or if a gene of `parent1`
+/// is missing from `parent2`.
 ///
 /// # Example
 /// ```

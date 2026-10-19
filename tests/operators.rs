@@ -1,5 +1,7 @@
 #[path = "operators/crossover.rs"]
 mod crossover;
+#[path = "operators/mutation.rs"]
+mod mutation;
 #[path = "operators/selection.rs"]
 mod selection;
 mod support;

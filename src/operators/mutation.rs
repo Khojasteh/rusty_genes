@@ -177,8 +177,7 @@ pub fn inversion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     genome[range].reverse();
 }
 
-/// Removes a gene from a random position in the genome and inserts it at another position. This
-/// results in the shifting of the rest of the genes between the two positions.
+/// Moves one gene to a distinct position before or after it, shifting the intervening genes.
 ///
 /// The mutation operator can introduce a small local rearrangement of genes which can be particularly
 /// useful in permutation-based problems where the relative ordering of genes is important.
@@ -200,11 +199,14 @@ pub fn inversion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
 ///
 /// insertion_mutation(&mut genome, &mut Rng::from_seed(1));
 ///
+/// // The genes from the old to the new position of the moved gene shift by one position.
 /// let start = (0..10).position(|i| genome[i] != original[i]).unwrap();
 /// let end = (0..10).rposition(|i| genome[i] != original[i]).unwrap() + 1;
-/// let mut rotated = original[start..end].to_vec();
-/// rotated.rotate_right(1);
-/// assert_eq!(genome[start..end], rotated);
+/// let mut moved_left = original[start..end].to_vec();
+/// moved_left.rotate_right(1);
+/// let mut moved_right = original[start..end].to_vec();
+/// moved_right.rotate_left(1);
+/// assert!(genome[start..end] == moved_left || genome[start..end] == moved_right);
 /// ```
 #[inline]
 pub fn insertion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
@@ -213,11 +215,12 @@ pub fn insertion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
         return;
     }
 
-    let (mut p1, mut p2) = random_pair(n, rng);
-    if p1 > p2 {
-        std::mem::swap(&mut p1, &mut p2);
+    let (from, to) = random_pair(n, rng);
+    if from > to {
+        genome[to..=from].rotate_right(1);
+    } else {
+        genome[from..=to].rotate_left(1);
     }
-    genome[p1..=p2].rotate_right(1);
 }
 
 /// Selects a gene from a random position in the genome and copies it to another position, replacing
