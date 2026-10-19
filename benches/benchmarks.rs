@@ -3,7 +3,10 @@ use criterion::{
     measurement::*,
 };
 use rusty_genes::*;
-use std::hint::black_box;
+use std::{
+    hash::{Hash, Hasher},
+    hint::black_box,
+};
 
 pub fn benchmark_crossover_strategies<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
@@ -182,11 +185,21 @@ pub fn benchmark_operator_helpers<M: Measurement>(
     });
 }
 
-/// An individual with a given identity and score, for benchmarks that need no genome.
+/// An individual with a given identity and score, for benchmarks that need no genome. It hashes
+/// its identity, or nothing when `hashed` is false, which makes its hash constant.
 #[derive(Debug, Clone, PartialEq)]
 struct Scored {
     id: usize,
     score: f64,
+    hashed: bool,
+}
+
+impl Hash for Scored {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if self.hashed {
+            self.id.hash(state);
+        }
+    }
 }
 
 impl Individual for Scored {
@@ -201,6 +214,7 @@ fn shuffled_individuals(size: usize) -> Vec<Scored> {
         .map(|id| Scored {
             id,
             score: id as f64 / size as f64,
+            hashed: true,
         })
         .collect::<Vec<_>>();
     Rng::from_seed(0).shuffle(&mut individuals);
@@ -240,19 +254,32 @@ pub fn benchmark_selection_strategies<M: Measurement>(
 }
 
 /// Measures creating a population, which validates, sorts, and deduplicates the individuals and
-/// collects their statistics, for different shapes of the individuals' scores.
+/// collects their statistics, for different shapes of the individuals' scores, and for
+/// individuals with a constant hash.
 pub fn benchmark_population<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     population_size: usize,
 ) {
     let distinct = shuffled_individuals(population_size);
     let equal_score = (0..population_size)
-        .map(|id| Scored { id, score: 1.0 })
+        .map(|id| Scored {
+            id,
+            score: 1.0,
+            hashed: true,
+        })
         .collect::<Vec<_>>();
     let duplicates = (0..population_size)
         .map(|i| Scored {
             id: i % 10,
             score: (i % 10) as f64,
+            hashed: true,
+        })
+        .collect::<Vec<_>>();
+    let constant_hash = distinct
+        .iter()
+        .map(|individual| Scored {
+            hashed: false,
+            ..individual.clone()
         })
         .collect::<Vec<_>>();
 
@@ -262,6 +289,7 @@ pub fn benchmark_population<M: Measurement>(
         ("Distinct score", &distinct),
         ("Equal score", &equal_score),
         ("Duplicates", &duplicates),
+        ("Distinct score, constant hash", &constant_hash),
     ] {
         group.bench_function(name, |b| {
             b.iter_batched(

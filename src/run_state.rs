@@ -123,12 +123,22 @@ impl<I: Individual> RunState<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{ops::ControlFlow, time::Duration};
+    use std::{
+        hash::{Hash, Hasher},
+        ops::ControlFlow,
+        time::Duration,
+    };
 
     #[derive(Debug, Clone, PartialEq)]
     struct Mock {
         id: u32,
         score: f64,
+    }
+
+    impl Hash for Mock {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.id.hash(state);
+        }
     }
 
     impl Individual for Mock {

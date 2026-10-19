@@ -106,6 +106,7 @@ pub(crate) fn interpolate_usize(min: usize, max: usize, ratio: f64) -> usize {
 /// of '1' bits in a binary string.
 pub mod one_max {
     use super::*;
+    use std::hash::{Hash, Hasher};
 
     /// Represents an individual in the OneMax problem.
     ///
@@ -125,6 +126,12 @@ pub mod one_max {
     }
 
     impl Eq for OneMax {}
+
+    impl Hash for OneMax {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.genome.hash(state);
+        }
+    }
 
     impl OneMax {
         /// Returns the binary string of the individual.

@@ -1,4 +1,5 @@
 use rusty_genes::*;
+use std::hash::{Hash, Hasher};
 
 /// A solution is a genome; its cached evaluation is not part of its identity.
 #[derive(Debug, Clone)]
@@ -19,6 +20,12 @@ impl From<Vec<bool>> for BitGenome {
 impl PartialEq for BitGenome {
     fn eq(&self, other: &Self) -> bool {
         self.genes == other.genes
+    }
+}
+
+impl Hash for BitGenome {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.genes.hash(state);
     }
 }
 
