@@ -109,7 +109,8 @@ impl CrossoverStrategy {
 /// partitions need not appear in either parent.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// Panics if the parent genomes have different lengths, or if `parent1` has a
+/// gene more than once, or if `partition_selector` returns an out-of-bounds index.
 ///
 /// # Example
 /// ```
@@ -154,6 +155,11 @@ where
         let mut partition = partitions.swap_remove(partition_index);
         offspring.append(&mut partition);
     }
+    // The partitions hold each gene of parent1 once, so a repeated gene would be lost.
+    assert!(
+        offspring.len() == parent1.len(),
+        "the parents should be permutations of the same genes"
+    );
     offspring
 }
 
@@ -172,7 +178,8 @@ where
 /// genes are copied from `parent1` without using `pivot`.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// Panics if the parent genomes have different lengths, or if `pivot` is not a
+/// gene of genomes that have at least two genes.
 ///
 /// # Example
 /// ```
@@ -395,8 +402,9 @@ where
 /// PMX is applicable to permutation-based problems.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths, or if the genes of
-/// `range` cannot be mapped because the parents are not permutations of the same genes.
+/// Panics if the parent genomes have different lengths, if `range` is not within
+/// the bounds of genomes that have at least two genes, or if the genes of `range` cannot be
+/// mapped because the parents are not permutations of the same genes.
 ///
 /// # Example
 /// ```
@@ -469,8 +477,9 @@ where
 /// OX is applicable to permutation-based problems.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths, or if `range` is not
-/// within the bounds of the genomes.
+/// Panics if the parent genomes have different lengths, if `range` is not
+/// within the bounds of the genomes, or if every gene of `parent2` is one of the genes that
+/// `range` copies from `parent1`, because the parents are not permutations of the same genes.
 ///
 /// # Example
 /// ```
@@ -509,6 +518,10 @@ where
     let copied_genes = GenePositions::new(&parent1[p1..p2]);
     let mut index1 = if p2 != n { p2 } else { 0 };
     let mut index2 = index1;
+    // Between permutations of the same genes, fewer than `n` genes in a row of parent2 are
+    // copied ones; otherwise a whole pass over parent2 can find no gene to fill a gap with, and
+    // then no later pass can.
+    let mut skipped = 0;
     while index1 != p1 {
         if !copied_genes.contains(&parent2[index2]) {
             genome[index1] = parent2[index2];
@@ -516,6 +529,13 @@ where
             if index1 == n {
                 index1 = 0;
             }
+            skipped = 0;
+        } else {
+            skipped += 1;
+            assert!(
+                skipped < n,
+                "the parents should be permutations of the same genes"
+            );
         }
         index2 += 1;
         if index2 == n {

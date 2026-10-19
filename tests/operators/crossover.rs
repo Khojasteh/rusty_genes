@@ -141,3 +141,17 @@ fn partially_mapped_crossover_rejects_parents_that_are_not_permutations_of_each_
     // The mapping of the copied range leads `true` back to itself, so it never ends.
     partially_mapped_crossover(&[true, false], &[true, true], 0..1);
 }
+
+#[test]
+#[should_panic(expected = "permutations of the same genes")]
+fn order_crossover_rejects_parents_that_are_not_permutations_of_each_other() {
+    // Every gene of the second parent is in the copied range, so no gene can fill the others.
+    order_crossover(&[0, 1, 2, 3], &[0, 1, 1, 0], 0..2);
+}
+
+#[test]
+#[should_panic(expected = "permutations of the same genes")]
+fn common_partition_crossover_rejects_a_first_parent_that_repeats_a_gene() {
+    // The repeated gene is in one partition, so the partitions are shorter than the genomes.
+    common_partition_crossover(&[0, 0, 1, 2], &[0, 1, 2, 0], |_, _| 0);
+}
