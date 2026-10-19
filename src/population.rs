@@ -1,6 +1,9 @@
 use super::*;
 use rayon::prelude::*;
-use std::ops::Deref;
+use std::{
+    hash::{BuildHasher, BuildHasherDefault},
+    ops::Deref,
+};
 
 /// Represents a population of individuals in an evolutionary algorithm.
 ///
@@ -24,8 +27,8 @@ impl<I: Individual> Population<I> {
     ///
     /// Invalid individuals (see [`Individual::is_valid`]) and duplicates are discarded, and the
     /// remaining individuals are sorted by their score.
-    /// Deduplication uses [`PartialEq`] across all scores and takes quadratic time in
-    /// the worst case.
+    /// Deduplication uses [`PartialEq`] across all scores, comparing only individuals with equal
+    /// [`Hash`](std::hash::Hash) values (see [`Individual`]).
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual is given.
@@ -141,29 +144,57 @@ fn normalize<I: Individual>(
         .ok_or(EvolutionError::EmptyPopulation)
 }
 
-/// Removes duplicate individuals from a vector that is sorted by score.
+/// Removes duplicate individuals from a vector that is sorted by score, keeping the order of the
+/// remaining ones. Equal solutions retain their best evaluation.
 ///
-/// Scan from best to worst so equal solutions retain their best evaluation. The retained tail
-/// preserves the order of surviving individuals. With only `PartialEq`, the worst case is quadratic.
+/// Equal individuals have equal hashes, so only individuals with equal hashes are compared, from
+/// best to worst.
 fn remove_duplicates<I: Individual>(individuals: &mut Vec<I>) {
-    let mut start = individuals.len();
-    for i in (0..individuals.len()).rev() {
-        if !individuals[start..].contains(&individuals[i]) {
-            start -= 1;
-            individuals.swap(start, i);
+    let hasher = BuildHasherDefault::<GeneHasher>::default();
+    let mut order = individuals
+        .iter()
+        .enumerate()
+        .map(|(i, individual)| (hasher.hash_one(individual), i))
+        .collect::<Vec<_>>();
+    order.sort_unstable();
+
+    let mut keep = vec![false; individuals.len()];
+    let mut kept = Vec::new();
+    for group in order.chunk_by(|a, b| a.0 == b.0) {
+        kept.clear();
+        for &(_, i) in group.iter().rev() {
+            if !kept.contains(&&individuals[i]) {
+                kept.push(&individuals[i]);
+                keep[i] = true;
+            }
         }
     }
-    individuals.drain(..start);
+
+    let mut keep = keep.into_iter();
+    individuals.retain(|_| keep.next() == Some(true));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        hash::{Hash, Hasher},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
     #[derive(Debug, Clone, PartialEq)]
     struct Mock {
         id: u32,
         score: f64,
+    }
+
+    impl Hash for Mock {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.id.hash(state);
+        }
     }
 
     impl Individual for Mock {
@@ -174,6 +205,82 @@ mod tests {
 
     fn mock(id: u32, score: f64) -> Mock {
         Mock { id, score }
+    }
+
+    /// An individual whose equality ignores its score and counts the comparisons. It hashes its
+    /// key, or nothing if it has no key, so that its hash can collide with other identities.
+    #[derive(Debug, Clone)]
+    struct Counted {
+        id: u64,
+        score: f64,
+        key: Option<u64>,
+        comparisons: Arc<AtomicUsize>,
+    }
+
+    impl PartialEq for Counted {
+        fn eq(&self, other: &Self) -> bool {
+            self.comparisons.fetch_add(1, Ordering::Relaxed);
+            self.id == other.id
+        }
+    }
+
+    impl Hash for Counted {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            if let Some(key) = self.key {
+                key.hash(state);
+            }
+        }
+    }
+
+    impl Individual for Counted {
+        fn score(&self) -> f64 {
+            self.score
+        }
+    }
+
+    fn counted_individuals(
+        individuals: &[(u64, f64)],
+        key: fn(u64) -> Option<u64>,
+        comparisons: &Arc<AtomicUsize>,
+    ) -> Vec<Counted> {
+        individuals
+            .iter()
+            .map(|&(id, score)| Counted {
+                id,
+                score,
+                key: key(id),
+                comparisons: comparisons.clone(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn deduplication_compares_only_individuals_with_equal_hashes() {
+        let comparisons = Arc::new(AtomicUsize::new(0));
+        let individuals = (0..100).map(|id| (id, id as f64)).collect::<Vec<_>>();
+        let population =
+            Population::new(counted_individuals(&individuals, Some, &comparisons)).unwrap();
+
+        assert_eq!(population.len(), 100);
+        assert_eq!(comparisons.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn deduplication_keeps_the_best_evaluation_with_colliding_or_constant_hashes() {
+        let individuals = [(1, 1.0), (2, 2.0), (1, 3.0), (3, 2.0), (2, 0.0)];
+        let keys: [fn(u64) -> Option<u64>; 3] =
+            [|id| Some(id % 2), |_| None, |id| (id != 3).then_some(id)];
+        for key in keys {
+            let comparisons = Arc::new(AtomicUsize::new(0));
+            let population =
+                Population::new(counted_individuals(&individuals, key, &comparisons)).unwrap();
+
+            let kept = population
+                .iter()
+                .map(|individual| (individual.id, individual.score))
+                .collect::<Vec<_>>();
+            assert_eq!(kept, vec![(2, 2.0), (3, 2.0), (1, 3.0)]);
+        }
     }
 
     #[test]

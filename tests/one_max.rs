@@ -1,5 +1,6 @@
 use rusty_genes::one_max::*;
 use rusty_genes::*;
+use std::hash::{BuildHasher, RandomState};
 
 #[test]
 fn one_max_identity_does_not_include_its_cached_evaluation() {
@@ -9,6 +10,8 @@ fn one_max_identity_does_not_include_its_cached_evaluation() {
     OneMaxEvolutionModel.evaluate(&mut evaluated);
     assert!(evaluated.is_valid());
     assert_eq!(unevaluated, evaluated);
+    let hasher = RandomState::new();
+    assert_eq!(hasher.hash_one(&unevaluated), hasher.hash_one(&evaluated));
 }
 
 #[test]

@@ -83,6 +83,7 @@ items. Its score is a count, without normalization or negation:
 
 ```rust
 use rusty_genes::*;
+use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
 struct Arrangement {
@@ -90,9 +91,16 @@ struct Arrangement {
     score: f64,
 }
 
+// An arrangement is identified by its order alone, not by its cached score.
 impl PartialEq for Arrangement {
     fn eq(&self, other: &Self) -> bool {
         self.order == other.order
+    }
+}
+
+impl Hash for Arrangement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.order.hash(state);
     }
 }
 
@@ -175,9 +183,12 @@ Keep these in mind when you define a model:
   selectors use ordering alone.
 - An individual whose score is not finite is invalid and never joins the population. Override
   `Individual::is_valid` to reject other infeasible solutions.
-- Compare genomes for equality independently of cached evaluations. When equal genomes have
-  different scores, deduplication keeps the better evaluation under the population's objective.
-  Use an invalid score until a new or changed genome has been evaluated; the engine evaluates
+- Implement `PartialEq` and `Hash` on the genome alone, excluding the cached score, as in the
+  example. Equal individuals must have equal hashes. Populations remove duplicates by comparing
+  only individuals with equal hashes; when equal genomes have different scores, they keep the
+  better evaluation under the population's objective. A constant hash is valid for a genome
+  that cannot be hashed, but deduplication then compares every pair, in quadratic time.
+- Use an invalid score until a new or changed genome has been evaluated; the engine evaluates
   the initial population and every offspring before admitting them.
 - Individuals are bred and evaluated on several threads, so the model must be `Sync`.
 - The model describes the problem only; the algorithm decides how parents are selected and

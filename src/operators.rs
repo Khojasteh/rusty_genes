@@ -22,15 +22,14 @@ type GeneMap<K, V> = HashMap<K, V, BuildHasherDefault<GeneHasher>>;
 /// A hash set of genes, using [`GeneHasher`].
 type GeneSet<K> = HashSet<K, BuildHasherDefault<GeneHasher>>;
 
-/// A fast, non-cryptographic hasher for the gene lookups of the genetic operators.
+/// Non-cryptographic hashing for permutation-operator lookups and population deduplication.
 ///
-/// The operators hash the genes of every genome they process, so the hasher is on their hot
-/// path. Unlike the standard library's default hasher, it is neither randomly seeded nor
-/// resistant to collision attacks, which is acceptable because the genes come from the caller's
-/// own model rather than from an adversary. Collections whose iteration order affects a result
-/// must not use it, since its order is the same on every run.
+/// These paths repeatedly hash model-supplied genes or individuals. The hasher is neither
+/// randomly seeded nor resistant to collision attacks; it assumes those inputs are not
+/// adversarial. Reproducible results must follow genome order or explicitly sorted indices
+/// rather than depend on the iteration order of these hash tables.
 #[derive(Debug, Default, Clone, Copy)]
-struct GeneHasher(u64);
+pub(crate) struct GeneHasher(u64);
 
 impl GeneHasher {
     #[inline]
