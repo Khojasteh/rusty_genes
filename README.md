@@ -59,6 +59,17 @@ closure. `run` returns an `Outcome` with the final state of the run, including t
 individual of any generation, and the reason it stopped. With a seed, every run gives the same
 result; without it, each run is seeded from the operating system.
 
+For a more realistic problem, the [flow shop example](examples/flow_shop.rs) orders 20 jobs that
+pass through 5 machines so that the last one finishes as early as possible. It minimizes that
+time in minutes, breeds orders with the order crossover and the insertion mutation, stops when
+the best order stops improving, and compares it with a lower bound that no order can beat. It
+runs the adaptive genetic algorithm, which crosses over and mutates each order at rates that
+depend on the makespans of its parents, and selects parents by its default roulette wheel:
+
+```sh
+cargo run --release --example flow_shop
+```
+
 ## Defining your own problem
 
 A problem consists of an individual, which holds a candidate solution and its score, and a
