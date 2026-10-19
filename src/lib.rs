@@ -113,6 +113,25 @@ pub mod one_max {
     /// The `genome` is a binary string represented as a vector of booleans. Each boolean
     /// represents a bit, and the score of an evaluated individual is the number of `true`
     /// bits, without normalization. An optimal genome of length `n` has a score of `n`.
+    ///
+    /// # Example
+    /// Equality and hashing use only the genome, so an individual equals its evaluated copy.
+    /// ```
+    /// use rusty_genes::one_max::*;
+    /// use rusty_genes::*;
+    /// use std::hash::{BuildHasher, RandomState};
+    ///
+    /// let unevaluated = OneMax::from(vec![true, false]);
+    /// assert!(!unevaluated.is_valid());
+    ///
+    /// let mut evaluated = unevaluated.clone();
+    /// OneMaxEvolutionModel.evaluate(&mut evaluated);
+    /// assert!(evaluated.is_valid());
+    ///
+    /// assert_eq!(unevaluated, evaluated);
+    /// let hasher = RandomState::new();
+    /// assert_eq!(hasher.hash_one(&unevaluated), hasher.hash_one(&evaluated));
+    /// ```
     #[derive(Debug, Clone)]
     pub struct OneMax {
         genome: Vec<bool>,
@@ -193,6 +212,41 @@ pub mod one_max {
 
         /// The goal is to set every bit, so it equals the genome length of this run.
         /// All individuals in a OneMax run must have the same genome length.
+        ///
+        /// # Example
+        /// A run stops as soon as every bit is set, even in its initial population. Each run
+        /// takes its goal from its own initial population, so the goal follows the genome length.
+        /// ```
+        /// use rusty_genes::one_max::*;
+        /// use rusty_genes::*;
+        ///
+        /// let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())?
+        ///     .into_evolution()
+        ///     .with_seed(42);
+        ///
+        /// let outcome = evolution.evolve_population(vec![OneMax::from(vec![true; 8])], |s| {
+        ///     Limits::new().generations(5).check(s)
+        /// })?;
+        /// assert_eq!(outcome.reason(), &StopReason::GoalReached);
+        /// assert_eq!(outcome.state().generation(), 0);
+        /// assert_eq!(outcome.state().population().fittest().score(), 8.0);
+        ///
+        /// let limits = Limits::new().generations(2);
+        /// let first = evolution
+        ///     .evolve_population(vec![OneMax::from(vec![true])], |s| limits.check(s))?;
+        /// assert_eq!(first.state().generation(), 0);
+        ///
+        /// let second = evolution.evolve_population(
+        ///     vec![OneMax::from(vec![true, false, true, false])],
+        ///     |s| limits.check(s),
+        /// )?;
+        /// assert!(second.state().generation() > 0);
+        /// assert_eq!(
+        ///     OneMaxEvolutionModel.goal_score(second.state().population()),
+        ///     Some(4.0)
+        /// );
+        /// # Ok::<(), EvolutionError>(())
+        /// ```
         fn goal_score(&self, initial_population: &Population<OneMax>) -> Option<f64> {
             Some(initial_population.fittest().genome.len() as f64)
         }
@@ -210,6 +264,24 @@ pub mod one_max {
         }
 
         /// Flips one randomly chosen bit, allowing new set bits even in an all-zero genome.
+        ///
+        /// # Example
+        /// The mutated individual remains invalid until it is evaluated again.
+        /// ```
+        /// use rusty_genes::one_max::*;
+        /// use rusty_genes::*;
+        ///
+        /// let mut individual = OneMax::from(vec![false]);
+        /// OneMaxEvolutionModel.evaluate(&mut individual);
+        /// assert!(individual.is_valid());
+        ///
+        /// OneMaxEvolutionModel.mutate(&mut individual, &mut Rng::from_seed(0));
+        /// assert!(!individual.is_valid());
+        ///
+        /// OneMaxEvolutionModel.evaluate(&mut individual);
+        /// assert_eq!(individual.genome(), &[true]);
+        /// assert_eq!(individual.score(), 1.0);
+        /// ```
         fn mutate(&self, individual: &mut Self::Individual, rng: &mut Rng) {
             if !individual.genome.is_empty() {
                 let index = rng.random_range(0..individual.genome.len());
@@ -220,6 +292,34 @@ pub mod one_max {
 
         /// Evaluates the individual's score as the number of `true` bits in its genome.
         /// Empty genomes remain invalid according to [`Individual::is_valid`].
+        ///
+        /// # Example
+        /// ```
+        /// use rusty_genes::one_max::*;
+        /// use rusty_genes::*;
+        ///
+        /// for (genome, expected) in [
+        ///     (vec![false], 0.0),
+        ///     (vec![true], 1.0),
+        ///     (vec![true, false, true, false], 2.0),
+        ///     (vec![true, true, false, false, false, false], 2.0),
+        ///     (vec![true; 8], 8.0),
+        /// ] {
+        ///     let mut individual = OneMax::from(genome);
+        ///     OneMaxEvolutionModel.evaluate(&mut individual);
+        ///     assert_eq!(individual.score(), expected);
+        ///     assert!(individual.is_valid());
+        /// }
+        ///
+        /// // An empty genome remains invalid, so a population cannot hold it.
+        /// let mut empty = OneMax::from(vec![]);
+        /// OneMaxEvolutionModel.evaluate(&mut empty);
+        /// assert!(!empty.is_valid());
+        /// assert!(matches!(
+        ///     Population::new(vec![empty]),
+        ///     Err(EvolutionError::EmptyPopulation)
+        /// ));
+        /// ```
         fn evaluate(&self, individual: &mut Self::Individual) {
             let one_bits = individual.genome.iter().filter(|&&one| one).count();
             individual.score = one_bits as f64;

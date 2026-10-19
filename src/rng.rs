@@ -15,11 +15,39 @@ use std::ops::Range;
 ///
 /// With the `rand-0_10` feature, the generator also implements the random number generator traits
 /// of `rand` 0.10, so it can be used with the distributions and other functions of that crate.
+///
+/// # Example
+/// With the `rand-0_10` feature, the generator shuffles a slice and samples a value through `rand`.
+/// ```
+/// # #[cfg(feature = "rand-0_10")]
+/// # {
+/// use rand::{RngExt as _, seq::SliceRandom};
+/// use rusty_genes::Rng;
+///
+/// let mut rng = Rng::from_seed(3);
+/// let mut values = (0..10).collect::<Vec<_>>();
+/// values.shuffle(&mut rng);
+/// values.sort_unstable();
+///
+/// assert_eq!(values, (0..10).collect::<Vec<_>>());
+/// assert!((0.0..1.0).contains(&rng.random::<f64>()));
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Rng(Xoshiro256PlusPlus);
 
 impl Rng {
     /// Creates a generator from a seed.
+    ///
+    /// # Example
+    /// ```
+    /// use rusty_genes::Rng;
+    ///
+    /// let mut a = Rng::from_seed(42);
+    /// let mut b = Rng::from_seed(42);
+    ///
+    /// assert!((0..10).all(|_| a.next_u64() == b.next_u64()));
+    /// ```
     pub fn from_seed(seed: u64) -> Self {
         Self(Xoshiro256PlusPlus::seed_from_u64(seed))
     }
@@ -34,6 +62,19 @@ impl Rng {
     ///
     /// Taking the generator of each unit of work by its index from the returned [`RngStreams`]
     /// makes the result of parallel work independent of how the work is scheduled.
+    ///
+    /// # Example
+    /// The generator of each index depends only on the state of the split generator and the
+    /// index.
+    /// ```
+    /// use rusty_genes::Rng;
+    ///
+    /// let streams = Rng::from_seed(7).split();
+    /// let again = Rng::from_seed(7).split();
+    ///
+    /// assert_eq!(streams.rng(3).next_u64(), again.rng(3).next_u64());
+    /// assert_ne!(streams.rng(3).next_u64(), streams.rng(4).next_u64());
+    /// ```
     pub fn split(&mut self) -> RngStreams {
         RngStreams {
             seed: self.next_u64(),
@@ -56,6 +97,17 @@ impl Rng {
     ///
     /// A probability of 0.0 or less, or NaN, never returns [`true`], and a probability of 1.0 or
     /// more always does.
+    ///
+    /// # Example
+    /// ```
+    /// use rusty_genes::Rng;
+    ///
+    /// let mut rng = Rng::from_seed(0);
+    ///
+    /// assert!((0..100).all(|_| !rng.random_bool(0.0)));
+    /// assert!((0..100).all(|_| !rng.random_bool(f64::NAN)));
+    /// assert!((0..100).all(|_| rng.random_bool(1.0)));
+    /// ```
     #[inline]
     pub fn random_bool(&mut self, p: f64) -> bool {
         self.random_f64() < p
@@ -146,48 +198,5 @@ impl rand_core_0_10::TryRng for Rng {
     fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
         self.0.fill_bytes(dst);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generators_from_the_same_seed_are_equal() {
-        let mut a = Rng::from_seed(42);
-        let mut b = Rng::from_seed(42);
-        assert!((0..10).all(|_| a.next_u64() == b.next_u64()));
-    }
-
-    #[test]
-    fn streams_depend_only_on_the_parent_state_and_index() {
-        let streams = Rng::from_seed(7).split();
-        let again = Rng::from_seed(7).split();
-
-        assert_eq!(streams.rng(3).next_u64(), again.rng(3).next_u64());
-        assert_ne!(streams.rng(3).next_u64(), streams.rng(4).next_u64());
-    }
-
-    #[cfg(feature = "rand-0_10")]
-    #[test]
-    fn generator_works_with_rand_0_10() {
-        use rand::{RngExt as _, seq::SliceRandom};
-
-        let mut rng = Rng::from_seed(3);
-        let mut values = (0..10).collect::<Vec<_>>();
-        values.shuffle(&mut rng);
-        values.sort_unstable();
-
-        assert_eq!(values, (0..10).collect::<Vec<_>>());
-        assert!((0.0..1.0).contains(&rng.random::<f64>()));
-    }
-
-    #[test]
-    fn random_bool_follows_the_probability_bounds() {
-        let mut rng = Rng::from_seed(0);
-        assert!((0..100).all(|_| !rng.random_bool(0.0)));
-        assert!((0..100).all(|_| !rng.random_bool(f64::NAN)));
-        assert!((0..100).all(|_| rng.random_bool(1.0)));
     }
 }
