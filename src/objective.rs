@@ -49,6 +49,12 @@ impl Objective {
         }
     }
 
+    /// Returns whether a finite score reaches or passes a finite goal in this direction.
+    #[inline]
+    pub fn is_goal_reached(self, score: f64, goal: f64) -> bool {
+        score.is_finite() && goal.is_finite() && self.is_at_least_as_fit(score, goal)
+    }
+
     /// Returns `score` as a value to maximize, which is the score itself for maximization and
     /// its negation for minimization.
     #[inline]

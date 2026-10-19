@@ -49,3 +49,42 @@ fn empty_one_max_genomes_remain_invalid() {
         Err(EvolutionError::EmptyPopulation)
     ));
 }
+
+#[test]
+fn one_max_stops_at_the_native_count_target() {
+    let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
+        .unwrap()
+        .into_evolution()
+        .with_seed(42);
+    let outcome = evolution
+        .evolve_population(vec![OneMax::from(vec![true; 8])], |state| {
+            Limits::new().generations(5).check(state)
+        })
+        .unwrap();
+    assert_eq!(outcome.reason(), &StopReason::GoalReached);
+    assert_eq!(outcome.state().generation(), 0);
+    assert_eq!(outcome.state().population().fittest().score(), 8.0);
+}
+
+#[test]
+fn one_max_recomputes_its_goal_for_each_genome_length() {
+    let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
+        .unwrap()
+        .into_evolution()
+        .with_seed(42);
+    let limits = Limits::new().generations(2);
+    let first = evolution
+        .evolve_population(vec![OneMax::from(vec![true])], |s| limits.check(s))
+        .unwrap();
+    assert_eq!(first.state().generation(), 0);
+    let second = evolution
+        .evolve_population(vec![OneMax::from(vec![true, false, true, false])], |s| {
+            limits.check(s)
+        })
+        .unwrap();
+    assert!(second.state().generation() > 0);
+    assert_eq!(
+        OneMaxEvolutionModel.goal_score(second.state().population()),
+        Some(4.0)
+    );
+}

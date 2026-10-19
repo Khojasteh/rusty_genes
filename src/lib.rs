@@ -29,7 +29,6 @@
 //! ```
 //! use rusty_genes::one_max::*;
 //! use rusty_genes::*;
-//! use std::ops::ControlFlow;
 //!
 //! const GENOME_LENGTH: usize = 64;
 //!
@@ -40,11 +39,7 @@
 //! // Evolve 64-bit strings towards all '1' bits for at most 100 generations.
 //! let limits = Limits::new().generations(100);
 //! let outcome = evolution.run(&GENOME_LENGTH, |state| {
-//!     if state.fittest_so_far().score() < GENOME_LENGTH as f64 {
-//!         limits.check(state)
-//!     } else {
-//!         ControlFlow::Break(StopReason::Custom("every bit is set".into()))
-//!     }
+//!     limits.check(state)
 //! })?;
 //! println!("Stopped at generation {}: {}", outcome.state().generation(), outcome.reason());
 //! let solution = outcome.into_fittest_so_far();
@@ -188,6 +183,12 @@ pub mod one_max {
     /// Implements the methods required by the [`EvolutionModel`] trait for the OneMax problem.
     impl EvolutionModel for OneMaxEvolutionModel {
         type Individual = OneMax;
+
+        /// The goal is to set every bit, so it equals the genome length of this run.
+        /// All individuals in a OneMax run must have the same genome length.
+        fn goal_score(&self, initial_population: &Population<OneMax>) -> Option<f64> {
+            Some(initial_population.fittest().genome.len() as f64)
+        }
 
         /// Performs a single point crossover on the parents' genomes to create a new individual.
         fn crossover(

@@ -12,7 +12,8 @@ that suit your problem, and you can replace any step of an algorithm with your o
 ## Features
 
 - **Algorithms:** a standard genetic algorithm, and an adaptive genetic algorithm that adjusts
-  its crossover and mutation rates to the diversity of the population.
+  its crossover and mutation rates to the diversity of the population. Runs stop automatically
+  when the model's goal score is reached.
 - **Selection:** tournament, roulette wheel, Boltzmann, rank, linear, and elitist.
 - **Crossover:** generalized partition (GPX2), sequential constructive (SCX), edge recombination
   (ERX), partially mapped (PMX), order (OX), cycle (CX), and single-point (SPX).
@@ -42,7 +43,6 @@ This runs the genetic algorithm on it with the default parameters:
 ```rust
 use rusty_genes::one_max::*;
 use rusty_genes::*;
-use std::ops::ControlFlow;
 
 const GENOME_LENGTH: usize = 100;
 
@@ -55,11 +55,7 @@ let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default
 let limits = Limits::new().generations(200);
 let outcome = evolution
     .run(&GENOME_LENGTH, |state| {
-        if state.fittest_so_far().score() < GENOME_LENGTH as f64 {
-            limits.check(state)
-        } else {
-            ControlFlow::Break(StopReason::Custom("every bit is set".into()))
-        }
+        limits.check(state)
     })
     .expect("random OneMax individuals are valid");
 
@@ -71,8 +67,10 @@ println!("Best score: {}", outcome.into_fittest_so_far().score());
 closure receives the `RunState` of the run, with its population, generation number,
 stagnation, fittest individual so far, and elapsed time, and returns `ControlFlow::Break` with
 a `StopReason` to stop the run; `Limits` stops it after a number of generations, generations
-without improvement, or a time. `run` returns an `Outcome` with the final state of the run,
-including the fittest individual of any generation, and the reason it stopped. With the
+without improvement, or a time. The model's goal also stops the run automatically. OneMax's
+goal is the genome length, so no score check is needed in the closure. `run` returns an
+`Outcome` with the final state of the run, including the fittest individual of any
+generation, and the reason it stopped. With the
 seed, every run gives the same result; without it, each run is seeded from the operating
 system.
 
@@ -122,6 +120,10 @@ impl EvolutionModel for Sorting {
         Objective::Minimize
     }
 
+    fn goal_score(&self, _initial_population: &Population<Arrangement>) -> Option<f64> {
+        Some(0.0) // No misplaced items.
+    }
+
     fn crossover(&self, a: &Arrangement, b: &Arrangement, rng: &mut Rng) -> Arrangement {
         let order = CrossoverStrategy::PartiallyMapped.crossover(&a.order, &b.order, rng);
         Arrangement { order, score: f64::NAN }
@@ -159,6 +161,10 @@ Keep these in mind when you define a model:
   `Objective::Minimize` when lower scores are better. `Individual::score` returns the raw
   score in either case; any finite `f64` is supported, including negative values. OneMax uses
   the number of set bits, while the sorting example uses the number of misplaced items.
+- Override `EvolutionModel::goal_score` to return an optional finite target. It receives the
+  evaluated initial population and is called once per run. Maximization stops at or above the
+  target; minimization stops at or below it. The default `None` leaves stopping to the callback.
+  Keep a generation or stagnation limit for problems that may never reach their goal.
 - Populations are ordered from worst to best under their objective. `fittest`, `fittest_so_far`,
   elites, selection, and survival follow that direction. `stats().min()`, `max()`, and `avg()`
   always describe the numerical scores in their original units.

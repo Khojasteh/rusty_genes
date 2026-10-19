@@ -62,6 +62,8 @@ fn objective_comparison_preserves_precision_and_treats_signed_zero_as_equal() {
     assert!(Objective::Maximize.is_fitter(higher, lower));
     for objective in [Objective::Minimize, Objective::Maximize] {
         assert!(objective.cmp_fitness(-0.0, 0.0).is_eq());
+        assert!(objective.is_goal_reached(-0.0, 0.0));
+        assert!(objective.is_goal_reached(0.0, -0.0));
     }
     let population = population(&[higher, lower], Objective::Minimize);
     assert_eq!(population.fittest().score().to_bits(), lower.to_bits());

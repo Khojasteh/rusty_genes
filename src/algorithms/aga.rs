@@ -3,10 +3,9 @@ use std::ops::RangeInclusive;
 
 /// Represents the parameters of an [`AdaptiveGeneticAlgorithm`].
 ///
-/// # Note
-/// The parameters are validated when an [`AdaptiveGeneticAlgorithm`] is created with them. How
-/// long the algorithm runs is decided by the `progress` closure given to the methods of
-/// [`Evolution`].
+/// Start with [`Default::default`] and modify fields before passing them to
+/// [`AdaptiveGeneticAlgorithm::new`], which validates them. Stopping belongs to the model's goal
+/// and the progress callback supplied to [`Evolution`].
 ///
 /// New parameters may be added in the future, so the parameters are created by
 /// [`Default::default`] and then changed as needed.
@@ -150,7 +149,6 @@ fn check_probability_range(
 /// ```
 /// use rusty_genes::*;
 /// use rusty_genes::one_max::*;
-/// use std::ops::ControlFlow;
 ///
 /// const ONE_MAX_LENGTH: usize = 100;
 ///
@@ -158,16 +156,9 @@ fn check_probability_range(
 /// aga_params.selection_strategy = SelectionStrategy::Tournament(4);
 /// let mut aga = AdaptiveGeneticAlgorithm::new(OneMaxEvolutionModel, aga_params)?.into_evolution();
 ///
-/// // Stop when every bit is set, or after 200 generations.
 /// let limits = Limits::new().generations(200);
 /// let solution = aga
-///     .run(&ONE_MAX_LENGTH, |state| {
-///         if state.fittest_so_far().score() < ONE_MAX_LENGTH as f64 {
-///             limits.check(state)
-///         } else {
-///             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
-///         }
-///     })?
+///     .run(&ONE_MAX_LENGTH, |state| limits.check(state))?
 ///     .into_fittest_so_far();
 ///
 /// println!("Best score: {} of {}", solution.score(), ONE_MAX_LENGTH);

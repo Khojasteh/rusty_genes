@@ -331,7 +331,7 @@ pub fn benchmark_generation_steps<M: Measurement>(
 }
 
 /// Measures complete runs of the evolutionary algorithms on the OneMax problem, from the same
-/// random initial population, for a fixed number of generations.
+/// random initial population, up to a generation limit or the model's goal.
 pub fn benchmark_evolution<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     genome_length: usize,
@@ -349,7 +349,6 @@ pub fn benchmark_evolution<M: Measurement>(
 
     let limits = Limits::new().generations(generations);
     group.sample_size(20);
-    group.throughput(Throughput::Elements(generations as u64));
 
     group.bench_function("GA", |b| {
         let mut parameters = GeneticAlgorithmParameters::default();
@@ -408,7 +407,7 @@ pub fn benchmark(c: &mut Criterion) {
         100,
     );
     benchmark_evolution(
-        c.benchmark_group("Evolution (OneMax 100 bits, 100 individuals, 20 generations)"),
+        c.benchmark_group("Evolution (OneMax 100 bits, 100 individuals, up to 20 generations)"),
         100,
         100,
         20,

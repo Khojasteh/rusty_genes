@@ -24,6 +24,20 @@ pub trait EvolutionModel: Sync {
         Objective::Maximize
     }
 
+    /// Returns the optional score at which a run has achieved its goal.
+    ///
+    /// Called once with the evaluated initial population, so goals may depend on the problem
+    /// instance, such as a OneMax genome's length. The returned goal stays fixed for that run.
+    /// The default is [`None`], leaving termination entirely to the progress callback.
+    ///
+    /// A goal must be finite. [`Evolution`] stops with [`StopReason::GoalReached`] before
+    /// breeding another generation when the best score is at least the goal for maximization
+    /// or at most the goal for minimization. The progress callback does not observe the
+    /// generation that reaches the goal; the [`Outcome`] of the run holds it.
+    fn goal_score(&self, _initial_population: &Population<Self::Individual>) -> Option<f64> {
+        None
+    }
+
     /// Creates an offspring by combining the genetic information of two individuals.
     ///
     /// # Arguments

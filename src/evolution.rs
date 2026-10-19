@@ -102,12 +102,19 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     ///   [`ControlFlow::Continue`] to continue, or [`ControlFlow::Break`] with the reason to
     ///   stop, for example by checking [`Limits`].
     ///
+    /// The model's [`goal_score`](EvolutionModel::goal_score) is read once after the initial
+    /// population has been evaluated. If present, the run stops with
+    /// [`StopReason::GoalReached`] as soon as its best score is at least that goal for
+    /// maximization or at most that goal for minimization, without calling `progress` for the
+    /// generation that reaches it.
+    ///
     /// # Returns
     /// The [`Outcome`] of the run, which holds its final state, including the fittest
     /// individual of any generation, and the reason it stopped.
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual could be generated.
+    /// Returns [`EvolutionError::InvalidParameter`] if the model's goal score is not finite.
     pub fn run<T, F>(
         &mut self,
         args: &T,
@@ -133,12 +140,13 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     ///
     /// The original is retained in the initial set. Copies are varied by
     /// [`EvolutionModel::mutate`], and the algorithm evaluates every starting individual,
-    /// including the original, rather than trusting its cached score. `progress` and the
-    /// outcome work as in [`run`](Self::run).
+    /// including the original, rather than trusting its cached score. `progress`, goal
+    /// stopping, and the outcome work as in [`run`](Self::run).
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if the initial population has no valid
     /// individual.
+    /// Returns [`EvolutionError::InvalidParameter`] if the model's goal score is not finite.
     ///
     /// # Note
     /// This method is intended to be used when a good individual has already been found, so its
@@ -170,11 +178,12 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     /// Runs the evolutionary algorithm on a given initial population.
     ///
     /// The algorithm evaluates the starting individuals, so cached scores are not required.
-    /// `progress` and the outcome work as in [`run`](Self::run).
+    /// `progress`, goal stopping, and the outcome work as in [`run`](Self::run).
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if the initial population has no valid
     /// individual, or if a generation ends up with no valid individual.
+    /// Returns [`EvolutionError::InvalidParameter`] if the model's goal score is not finite.
     pub fn evolve_population<F>(
         &mut self,
         initial_population: Vec<IndividualOf<A>>,
@@ -209,10 +218,25 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
         algorithm.evaluate_initial(&mut initial_population);
         let population =
             Population::with_objective(initial_population, algorithm.model().objective())?;
+        let goal_score = algorithm.model().goal_score(&population);
+        if goal_score.is_some_and(|goal| !goal.is_finite()) {
+            return Err(EvolutionError::invalid_parameter(
+                "goal_score",
+                "must be finite",
+            ));
+        }
         let mut state = RunState::started_at(population, started);
         let mut offspring = Vec::with_capacity(algorithm.population_size());
 
         let reason = loop {
+            if goal_score.is_some_and(|goal| {
+                state
+                    .population()
+                    .objective()
+                    .is_goal_reached(state.fittest_so_far().score(), goal)
+            }) {
+                break StopReason::GoalReached;
+            }
             if let ControlFlow::Break(reason) = progress(&state) {
                 break reason;
             }
