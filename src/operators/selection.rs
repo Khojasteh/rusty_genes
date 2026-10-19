@@ -10,6 +10,8 @@ use super::*;
 ///
 /// Each selection strategy has its own strengths and weaknesses, and the choice of strategy can
 /// significantly impact the performance of the evolutionary algorithm.
+///
+/// Every strategy gives individuals with equal scores equal chances of being selected.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SelectionStrategy {
@@ -217,11 +219,29 @@ impl WeightedIndex {
     }
 }
 
+/// Returns the mean position of the group of equal scores that each individual of `population`
+/// belongs to, in the order of the population.
+///
+/// Averaging a weight that is linear in the position over each group gives the weight at this
+/// position, so equal scores get equal weights while the total weight stays the same.
+fn tied_positions<I: Individual>(population: &Population<I>) -> impl Iterator<Item = f64> + '_ {
+    let mut start = 0;
+    population
+        .chunk_by(move |a, b| a.score() == b.score())
+        .flat_map(move |group| {
+            let mean = start as f64 + (group.len() - 1) as f64 / 2.0;
+            start += group.len();
+            std::iter::repeat_n(mean, group.len())
+        })
+}
+
 /// Represents the tournament selection algorithm.
 ///
 /// # Note
 /// The tournament selection method draws a fixed number of random candidates from the
-/// population, with replacement, and selects the best candidate under its objective.
+/// population, with replacement, and selects the best candidate under its objective. Of
+/// candidates with equal scores, the one drawn first wins, so individuals with equal scores
+/// have equal chances.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TournamentSelection {
     size: usize,
@@ -275,12 +295,15 @@ impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
 
     #[inline]
     fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        // The population is sorted from worst to best, so the highest index wins the tournament.
-        let index = (0..self.size)
-            .map(|_| self.indices.sample(population.len(), rng))
-            .max()
-            .unwrap();
-        (index, &population[index])
+        let objective = population.objective();
+        let mut winner = self.indices.sample(population.len(), rng);
+        for _ in 1..self.size {
+            let index = self.indices.sample(population.len(), rng);
+            if objective.is_fitter(population[index].score(), population[winner].score()) {
+                winner = index;
+            }
+        }
+        (winner, &population[winner])
     }
 }
 
@@ -461,7 +484,7 @@ impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
 /// # Note
 /// In rank selection, the probability of selecting an individual is proportional to its rank
 /// in the population sorted by score, where the least fit individual has rank 1 and the
-/// fittest has rank `n`.
+/// fittest has rank `n`. Individuals with equal scores share the average of their ranks.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RankSelection {
     weights: WeightedIndex,
@@ -477,9 +500,9 @@ impl RankSelection {
 impl<I: Individual> SelectionMechanism<I> for RankSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
-        // The population is sorted from worst to best.
+        // The population is sorted from worst to best, so the rank is the position plus one.
         self.weights
-            .rebuild((1..=population.len()).map(|rank| rank as f64));
+            .rebuild(tied_positions(population).map(|position| position + 1.0));
     }
 
     #[inline]
@@ -494,7 +517,9 @@ impl<I: Individual> SelectionMechanism<I> for RankSelection {
 /// # Note
 /// Elitist selection excludes the least fit portion of the population, given by the ratio, and
 /// selects uniformly among the remaining, fittest individuals. At least the fittest individual
-/// always remains selectable.
+/// always remains selectable. When individuals with equal scores are on both sides of the
+/// excluded portion, they share the chances of those among them that remain, so each of them is
+/// selectable with an equal, reduced chance.
 ///
 /// Note that using a high ratio in elitist selection may lead to premature convergence and a
 /// loss of population diversity.
@@ -502,6 +527,10 @@ impl<I: Individual> SelectionMechanism<I> for RankSelection {
 pub struct ElitistSelection {
     ratio: f64,
     indices: UniformIndex,
+    // The positions of the individuals whose score equals the score at the selection bound,
+    // when some of them are below the bound; otherwise both are the bound.
+    tied_start: usize,
+    tied_end: usize,
 }
 
 impl ElitistSelection {
@@ -515,6 +544,8 @@ impl ElitistSelection {
         Ok(Self {
             ratio,
             indices: UniformIndex::default(),
+            tied_start: 0,
+            tied_end: 0,
         })
     }
 
@@ -541,11 +572,26 @@ impl<I: Individual> SelectionMechanism<I> for ElitistSelection {
     fn prepare(&mut self, population: &Population<I>) {
         let selection_bound = interpolate_usize(0, population.len(), self.ratio);
         self.indices.prepare(selection_bound, population.len());
+        let tied = |i: usize| population[i].score() == population[selection_bound].score();
+        self.tied_start = selection_bound;
+        self.tied_end = selection_bound;
+        if selection_bound > 0 && tied(selection_bound - 1) {
+            while self.tied_start > 0 && tied(self.tied_start - 1) {
+                self.tied_start -= 1;
+            }
+            while self.tied_end < population.len() && tied(self.tied_end) {
+                self.tied_end += 1;
+            }
+        }
     }
 
     #[inline]
     fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        let index = self.indices.sample(population.len(), rng);
+        let mut index = self.indices.sample(population.len(), rng);
+        // A selectable individual tied with excluded ones stands for any of them.
+        if index < self.tied_end {
+            index = rng.random_range(self.tied_start..self.tied_end);
+        }
         (index, &population[index])
     }
 }
@@ -557,7 +603,8 @@ impl<I: Individual> SelectionMechanism<I> for ElitistSelection {
 /// linear function of the rank, controlled by the selective pressure `s` between 1.0 and 2.0,
 /// inclusive. The fittest individual is `s` times as likely to be selected as an average
 /// individual, and the least fit one is `2 - s` times as likely. A pressure of 1.0 selects
-/// uniformly, and higher values result in stronger selection pressure.
+/// uniformly, and higher values result in stronger selection pressure. Individuals with equal
+/// scores share the average of their probabilities.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinearSelection {
     pressure: f64,
@@ -613,8 +660,10 @@ impl<I: Individual> SelectionMechanism<I> for LinearSelection {
         let n = population.len();
         let last = n.saturating_sub(1).max(1) as f64;
         let s = self.pressure;
-        self.weights
-            .rebuild((0..n).map(|i| (2.0 - s) + 2.0 * (s - 1.0) * i as f64 / last));
+        self.weights.rebuild(
+            tied_positions(population)
+                .map(|position| (2.0 - s) + 2.0 * (s - 1.0) * position / last),
+        );
     }
 
     #[inline]

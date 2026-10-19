@@ -339,6 +339,50 @@ fn every_selector_uses_minimization_order() {
 }
 
 #[test]
+fn every_selector_gives_equal_scores_equal_chances() {
+    let population = weighted_population(&[0.0, 10.0, 10.0, 20.0], Objective::Maximize);
+    let boltzmann_sum = (-2.0_f64).exp() + 2.0 * (-1.0_f64).exp() + 1.0;
+    let strategies = [
+        // The two individuals of score 10 win a tournament of two whenever the fittest
+        // individual is not drawn but one of them is, which has a chance of 9/16 - 1/16.
+        (
+            SelectionStrategy::Tournament(2),
+            [1.0 / 16.0, 4.0 / 16.0, 4.0 / 16.0, 7.0 / 16.0],
+        ),
+        // The tied individuals share the ranks 2 and 3.
+        (SelectionStrategy::Rank, [0.1, 0.25, 0.25, 0.4]),
+        (SelectionStrategy::Linear(2.0), [0.0, 0.25, 0.25, 0.5]),
+        // Half of the population is excluded, which splits the tied individuals.
+        (SelectionStrategy::Elitist(0.5), [0.0, 0.25, 0.25, 0.5]),
+        (SelectionStrategy::RouletteWheel, [0.0, 0.25, 0.25, 0.5]),
+        (
+            SelectionStrategy::Boltzmann(10.0, 1.0),
+            [
+                (-2.0_f64).exp() / boltzmann_sum,
+                (-1.0_f64).exp() / boltzmann_sum,
+                (-1.0_f64).exp() / boltzmann_sum,
+                1.0 / boltzmann_sum,
+            ],
+        ),
+    ];
+    for (strategy, expected) in strategies {
+        let mut selector = strategy.create_selector::<BitGenome>().unwrap();
+        selector.prepare(&population);
+        let mut rng = Rng::from_seed(0);
+        let mut counts = [0; 4];
+        for _ in 0..100_000 {
+            counts[selector.select(&population, &mut rng).0] += 1;
+        }
+        for (index, count) in counts.into_iter().enumerate() {
+            assert!(
+                (count as f64 / 100_000.0 - expected[index]).abs() < 0.01,
+                "{strategy:?}: {counts:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn minimizing_roulette_handles_negative_and_extreme_native_scores() {
     for (scores, expected) in [
         ([-30.0, -20.0, -10.0], [1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0]),
