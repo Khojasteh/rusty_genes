@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::{Mutex, PoisonError};
 
 /// Represents various selection strategies for selecting an individual from the population in
 /// an evolutionary algorithm.
@@ -83,131 +84,106 @@ impl SelectionStrategy {
 /// Defines the mechanism for selecting an individual from the population in an evolutionary
 /// algorithm.
 ///
-/// The mechanism is shared by the threads that breed offspring in parallel, and it is part of
-/// algorithms that may be moved to other threads, so it must be [`Send`] and [`Sync`].
+/// A mechanism selects from a population through the [`Sampler`] it creates for that
+/// population, which holds what the mechanism derives from the population, such as the
+/// probability of selecting each individual.
+///
+/// The mechanism is part of algorithms that may be moved to other threads, so it must be
+/// [`Send`] and [`Sync`].
 /// Populations are ordered from worst to best. A custom mechanism comparing numerical scores
 /// directly must respect [`Population::objective`].
 pub trait SelectionMechanism<I: Individual>: Send + Sync {
-    /// Restores the state the mechanism adapts during a run, for a new run.
+    /// Creates a sampler that selects individuals of `population`, which is generation number
+    /// `generation` of its run.
     ///
     /// # Note
-    /// The algorithms of this library call this method when a run starts. The default
-    /// implementation performs no operation.
-    fn reset(&mut self) {}
-
-    /// Prepares the mechanism for selecting individuals from a population.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the population from which individuals will be selected.
-    ///
-    /// # Note
-    /// This method must be called once for each new population before selecting individuals
-    /// from it. It can be used to perform any necessary pre-processing.
-    fn prepare(&mut self, population: &Population<I>);
-
-    /// Selects an individual from the population.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the population from which an individual will be
-    ///   selected. It must be the population the mechanism was last prepared for.
-    /// * `rng` - A random number generator for stochastic selection strategies.
-    ///
-    /// # Returns
-    /// The index and a reference of the selected individual.
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I);
-
-    /// Selects an individual from the population, excluding a specific individual.
-    /// The selection attempt will be repeated for a specified number of tries (`max_tries`),
-    /// or until a different individual is found.
-    ///
-    /// # Arguments
-    /// * `population` - A reference to the population from which an individual will be selected.
-    /// * `rng` - A random number generator for stochastic selection strategies.
-    /// * `max_tries` - The maximum number of selection attempts before giving up.
-    /// * `excluded` - The individual to be excluded from selection.
-    ///
-    /// # Returns
-    /// Returns a tuple containing the index and a reference to the selected individual distinct
-    /// from the `excluded` one. If no different individual is found after `max_tries` attempts,
-    /// the method returns [`None`].
-    #[inline]
-    fn select_distinct<'a>(
-        &self,
+    /// The algorithms of this library create a sampler for each generation. A mechanism whose
+    /// selection changes during a run, such as [`BoltzmannSelection`], changes it by
+    /// `generation`, so a new run, which starts at generation zero, selects as if the mechanism
+    /// were new.
+    fn sampler<'a>(
+        &'a self,
         population: &'a Population<I>,
+        generation: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a>;
+}
+
+/// Selects individuals of the population that a [`SelectionMechanism`] created it for.
+///
+/// The sampler is shared by the threads that breed offspring in parallel, so it must be [`Sync`].
+pub trait Sampler<'a, I: Individual>: Sync {
+    /// Returns the population the sampler selects from.
+    fn population(&self) -> &'a Population<I>;
+
+    /// Selects a parent, returning its index and the individual at that index.
+    fn select(&self, rng: &mut Rng) -> (usize, &'a I);
+
+    /// Selects an individual of the population other than the one at index `excluded`, by
+    /// selecting at most `max_tries` times.
+    ///
+    /// # Returns
+    /// The index and a reference of the selected individual, or [`None`] if every selection
+    /// returned the excluded individual.
+    ///
+    /// The individuals of a population are distinct, so the selected individual differs from the
+    /// excluded one. The default implementation repeats [`select`](Sampler::select).
+    #[inline]
+    fn select_other(
+        &self,
         rng: &mut Rng,
+        excluded: usize,
         max_tries: usize,
-        excluded: &I,
     ) -> Option<(usize, &'a I)> {
         for _ in 0..max_tries {
-            let (index, candidate) = self.select(population, rng);
-            if candidate != excluded {
-                return Some((index, candidate));
+            let (index, individual) = self.select(rng);
+            if index != excluded {
+                return Some((index, individual));
             }
         }
         None
     }
 }
 
-/// Samples indices of a population uniformly from a range of indices.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct UniformIndex {
-    population_len: usize,
-    indices: Option<UniformIndices>,
-}
-
-impl UniformIndex {
-    /// Prepares for sampling indices from `start..population_len`.
-    fn prepare(&mut self, start: usize, population_len: usize) {
-        self.population_len = population_len;
-        self.indices = UniformIndices::new(start..population_len);
-    }
-
-    #[inline]
-    fn sample(&self, population_len: usize, rng: &mut Rng) -> usize {
-        match self.indices {
-            Some(indices) if population_len == self.population_len => indices.sample(rng),
-            _ => panic!("the selection mechanism is not prepared for the population"),
-        }
-    }
+/// Returns a sampler of the indices in `range` of a population, which is never empty.
+#[inline]
+fn uniform_indices(range: std::ops::Range<usize>) -> UniformIndices {
+    UniformIndices::new(range).expect("the range of selectable individuals is never empty")
 }
 
 /// Samples indices with probabilities proportional to non-negative weights.
 ///
 /// Weights that are negative or not finite count as zero. If no weight is positive, every index
 /// is equally likely.
-#[derive(Debug, Clone, Default, PartialEq)]
 struct WeightedIndex {
     cumulative_weights: Vec<f64>,
 }
 
 impl WeightedIndex {
-    fn rebuild(&mut self, weights: impl Iterator<Item = f64>) {
-        self.cumulative_weights.clear();
+    fn new(weights: impl Iterator<Item = f64>) -> Self {
         let mut largest: f64 = 0.0;
-        for weight in weights {
-            let weight = if weight > 0.0 && weight.is_finite() {
+        let mut cumulative_weights = weights
+            .map(|weight| {
+                let weight = if weight > 0.0 && weight.is_finite() {
+                    weight
+                } else {
+                    0.0
+                };
+                largest = largest.max(weight);
                 weight
-            } else {
-                0.0
-            };
-            largest = largest.max(weight);
-            self.cumulative_weights.push(weight);
-        }
+            })
+            .collect::<Vec<_>>();
         if largest > 0.0 {
             let mut total = 0.0;
-            for weight in &mut self.cumulative_weights {
+            for weight in &mut cumulative_weights {
                 total += *weight / largest;
                 *weight = total;
             }
         }
+        Self { cumulative_weights }
     }
 
-    fn sample(&self, len: usize, rng: &mut Rng) -> usize {
-        assert!(
-            self.cumulative_weights.len() == len,
-            "the selection mechanism is not prepared for the population"
-        );
-
+    fn sample(&self, rng: &mut Rng) -> usize {
+        let len = self.cumulative_weights.len();
         let total = self.cumulative_weights.last().copied().unwrap_or(0.0);
         if total > 0.0 && total.is_finite() {
             let target = rng.random_f64() * total;
@@ -216,6 +192,38 @@ impl WeightedIndex {
         } else {
             rng.random_range(0..len)
         }
+    }
+}
+
+/// Selects individuals of a population with probabilities proportional to weights.
+struct WeightedSampler<'a, I: Individual> {
+    population: &'a Population<I>,
+    weights: WeightedIndex,
+}
+
+impl<'a, I: Individual> WeightedSampler<'a, I> {
+    /// Creates a sampler whose weights are those of the individuals of `population`, in order.
+    fn boxed(
+        population: &'a Population<I>,
+        weights: impl Iterator<Item = f64>,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
+        Box::new(Self {
+            population,
+            weights: WeightedIndex::new(weights),
+        })
+    }
+}
+
+impl<'a, I: Individual> Sampler<'a, I> for WeightedSampler<'a, I> {
+    #[inline]
+    fn population(&self) -> &'a Population<I> {
+        self.population
+    }
+
+    #[inline]
+    fn select(&self, rng: &mut Rng) -> (usize, &'a I) {
+        let index = self.weights.sample(rng);
+        (index, &self.population[index])
     }
 }
 
@@ -245,7 +253,6 @@ fn tied_positions<I: Individual>(population: &Population<I>) -> impl Iterator<It
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TournamentSelection {
     size: usize,
-    indices: UniformIndex,
 }
 
 impl TournamentSelection {
@@ -255,10 +262,7 @@ impl TournamentSelection {
     /// Returns [`EvolutionError::InvalidParameter`] if `size` is zero.
     pub fn new(size: usize) -> Result<Self, EvolutionError> {
         Self::check_size(size)?;
-        Ok(Self {
-            size,
-            indices: UniformIndex::default(),
-        })
+        Ok(Self { size })
     }
 
     /// Gets the tournament size.
@@ -289,16 +293,39 @@ impl TournamentSelection {
 
 impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
     #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
-        self.indices.prepare(0, population.len());
+    fn sampler<'a>(
+        &'a self,
+        population: &'a Population<I>,
+        _: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
+        Box::new(TournamentSampler {
+            population,
+            size: self.size,
+            indices: uniform_indices(0..population.len()),
+        })
+    }
+}
+
+/// The sampler of a [`TournamentSelection`].
+struct TournamentSampler<'a, I: Individual> {
+    population: &'a Population<I>,
+    size: usize,
+    indices: UniformIndices,
+}
+
+impl<'a, I: Individual> Sampler<'a, I> for TournamentSampler<'a, I> {
+    #[inline]
+    fn population(&self) -> &'a Population<I> {
+        self.population
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
+    fn select(&self, rng: &mut Rng) -> (usize, &'a I) {
+        let population = self.population;
         let objective = population.objective();
-        let mut winner = self.indices.sample(population.len(), rng);
+        let mut winner = self.indices.sample(rng);
         for _ in 1..self.size {
-            let index = self.indices.sample(population.len(), rng);
+            let index = self.indices.sample(rng);
             if objective.is_fitter(population[index].score(), population[winner].score()) {
                 winner = index;
             }
@@ -318,21 +345,23 @@ impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
 /// overflow, scores are halved first. Weights are scaled before summing to avoid overflow.
 /// For minimization the same rule is applied to the negated scores internally: weights are
 /// proportional to `max(0, maximum score) - score`. Stored scores are unchanged.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct RouletteWheelSelection {
-    weights: WeightedIndex,
-}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RouletteWheelSelection;
 
 impl RouletteWheelSelection {
     /// Creates a new instance.
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
 impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
     #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
+    fn sampler<'a>(
+        &'a self,
+        population: &'a Population<I>,
+        _: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
         let objective = population.objective();
         let offset = objective.as_maximized(population[0].score()).min(0.0);
         let best = objective.as_maximized(population.fittest().score());
@@ -341,17 +370,12 @@ impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
         } else {
             1.0
         };
-        self.weights.rebuild(
+        WeightedSampler::boxed(
+            population,
             population
                 .iter()
-                .map(|i| objective.as_maximized(i.score()) * factor - offset * factor),
-        );
-    }
-
-    #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        let index = self.weights.sample(population.len(), rng);
-        (index, &population[index])
+                .map(move |i| objective.as_maximized(i.score()) * factor - offset * factor),
+        )
     }
 }
 
@@ -365,25 +389,24 @@ impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
 /// For minimization probabilities are proportional to `exp(-f / T)`, using the score in its
 /// original units. The temperature therefore has the same units as the score.
 ///
-/// The first population of a run is selected from at the initial temperature, and the
-/// temperature is multiplied by the cooling rate after each population, bounded to the
-/// positive finite `f64` range. The weights are computed relative to the fittest
-/// individual, so they cannot overflow at any temperature.
-#[derive(Debug, Clone, PartialEq)]
+/// A population of generation zero, the first of a run, is selected from at the initial
+/// temperature, and the temperature is multiplied by the cooling rate once for each later
+/// generation, bounded to the positive finite `f64` range. The weights are computed relative to
+/// the fittest individual, so they cannot overflow at any temperature.
+#[derive(Debug)]
 pub struct BoltzmannSelection {
     initial_temperature: f64,
-    temperature: f64,
     cooling_rate: f64,
-    weights: WeightedIndex,
+    // The last generation whose temperature was computed, and that temperature, from which the
+    // temperature of the next generation takes one cooling step.
+    cooled: Mutex<(usize, f64)>,
 }
 
 impl BoltzmannSelection {
     /// Creates a new instance.
     ///
-    /// # Arguments
-    /// * `temperature` - The initial temperature, which must be positive and finite.
-    /// * `cooling_rate` - The factor the temperature is multiplied by after each population,
-    ///   which must be positive and finite. A value less than 1.0 cools the temperature down.
+    /// Both values must be positive and finite. A cooling rate below 1 cools, 1 keeps the
+    /// temperature fixed, and a value above 1 heats the selection towards uniform probabilities.
     ///
     /// # Errors
     /// Returns [`EvolutionError::InvalidParameter`] if a parameter is invalid.
@@ -392,31 +415,31 @@ impl BoltzmannSelection {
         Self::check_positive("cooling rate", cooling_rate)?;
         Ok(Self {
             initial_temperature: temperature,
-            temperature,
             cooling_rate,
-            weights: WeightedIndex::default(),
+            cooled: Mutex::new((0, temperature)),
         })
     }
 
-    /// Gets the initial temperature, which [`reset`](SelectionMechanism::reset) restores for a
-    /// new run.
+    /// Gets the initial temperature, at which a population of generation zero is selected from.
     pub fn initial_temperature(&self) -> f64 {
         self.initial_temperature
     }
 
-    /// Gets the temperature for the next population.
-    pub fn temperature(&self) -> f64 {
-        self.temperature
-    }
-
-    /// Sets the temperature for the next population, without changing the initial temperature.
+    /// Returns the initial temperature cooled once for each step to `generation`.
     ///
-    /// # Errors
-    /// Returns [`EvolutionError::InvalidParameter`] if `temperature` is not positive and finite.
-    pub fn set_temperature(&mut self, temperature: f64) -> Result<(), EvolutionError> {
-        Self::check_positive("temperature", temperature)?;
-        self.temperature = temperature;
-        Ok(())
+    /// Repeated calls for the same generation do not cool again. Asking for an earlier
+    /// generation recomputes from the initial temperature; results are bounded to positive,
+    /// finite `f64` values even after underflow or overflow.
+    pub fn temperature_at(&self, generation: usize) -> f64 {
+        let mut cooled = self.cooled.lock().unwrap_or_else(PoisonError::into_inner);
+        if generation < cooled.0 {
+            *cooled = (0, self.initial_temperature);
+        }
+        while cooled.0 < generation {
+            cooled.1 = (cooled.1 * self.cooling_rate).clamp(f64::from_bits(1), f64::MAX);
+            cooled.0 += 1;
+        }
+        cooled.1
     }
 
     /// Gets the cooling rate.
@@ -431,6 +454,10 @@ impl BoltzmannSelection {
     pub fn set_cooling_rate(&mut self, cooling_rate: f64) -> Result<(), EvolutionError> {
         Self::check_positive("cooling rate", cooling_rate)?;
         self.cooling_rate = cooling_rate;
+        *self
+            .cooled
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = (0, self.initial_temperature);
         Ok(())
     }
 
@@ -446,36 +473,49 @@ impl BoltzmannSelection {
     }
 }
 
+/// A copy starts from the same parameters.
+impl Clone for BoltzmannSelection {
+    fn clone(&self) -> Self {
+        Self {
+            initial_temperature: self.initial_temperature,
+            cooling_rate: self.cooling_rate,
+            cooled: Mutex::new((0, self.initial_temperature)),
+        }
+    }
+}
+
+/// Instances are equal when their parameters are equal.
+impl PartialEq for BoltzmannSelection {
+    fn eq(&self, other: &Self) -> bool {
+        self.initial_temperature == other.initial_temperature
+            && self.cooling_rate == other.cooling_rate
+    }
+}
+
 impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
     #[inline]
-    fn reset(&mut self) {
-        self.temperature = self.initial_temperature;
-    }
-
-    #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
+    fn sampler<'a>(
+        &'a self,
+        population: &'a Population<I>,
+        generation: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
         // Subtracting the best score gives non-positive exponents in either direction.
-        let temperature = self.temperature;
+        let temperature = self.temperature_at(generation);
         let objective = population.objective();
         let best = objective.as_maximized(population.fittest().score());
-        self.weights.rebuild(population.iter().map(|i| {
-            let score = objective.as_maximized(i.score());
-            let difference = score - best;
-            let exponent = if difference.is_finite() {
-                difference / temperature
-            } else {
-                score / temperature - best / temperature
-            };
-            exponent.exp()
-        }));
-        self.temperature =
-            (self.temperature * self.cooling_rate).clamp(f64::from_bits(1), f64::MAX);
-    }
-
-    #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        let index = self.weights.sample(population.len(), rng);
-        (index, &population[index])
+        WeightedSampler::boxed(
+            population,
+            population.iter().map(move |i| {
+                let score = objective.as_maximized(i.score());
+                let difference = score - best;
+                let exponent = if difference.is_finite() {
+                    difference / temperature
+                } else {
+                    score / temperature - best / temperature
+                };
+                exponent.exp()
+            }),
+        )
     }
 }
 
@@ -485,30 +525,28 @@ impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
 /// In rank selection, the probability of selecting an individual is proportional to its rank
 /// in the population sorted by score, where the least fit individual has rank 1 and the
 /// fittest has rank `n`. Individuals with equal scores share the average of their ranks.
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct RankSelection {
-    weights: WeightedIndex,
-}
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RankSelection;
 
 impl RankSelection {
     /// Creates a new instance.
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
 impl<I: Individual> SelectionMechanism<I> for RankSelection {
     #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
+    fn sampler<'a>(
+        &'a self,
+        population: &'a Population<I>,
+        _: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
         // The population is sorted from worst to best, so the rank is the position plus one.
-        self.weights
-            .rebuild(tied_positions(population).map(|position| position + 1.0));
-    }
-
-    #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        let index = self.weights.sample(population.len(), rng);
-        (index, &population[index])
+        WeightedSampler::boxed(
+            population,
+            tied_positions(population).map(|position| position + 1.0),
+        )
     }
 }
 
@@ -526,11 +564,6 @@ impl<I: Individual> SelectionMechanism<I> for RankSelection {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ElitistSelection {
     ratio: f64,
-    indices: UniformIndex,
-    // The positions of the individuals whose score equals the score at the selection bound,
-    // when some of them are below the bound; otherwise both are the bound.
-    tied_start: usize,
-    tied_end: usize,
 }
 
 impl ElitistSelection {
@@ -541,12 +574,7 @@ impl ElitistSelection {
     /// and 1.0 (exclusive).
     pub fn new(ratio: f64) -> Result<Self, EvolutionError> {
         check_ratio("elitist selection ratio", ratio)?;
-        Ok(Self {
-            ratio,
-            indices: UniformIndex::default(),
-            tied_start: 0,
-            tied_end: 0,
-        })
+        Ok(Self { ratio })
     }
 
     /// Gets the ratio of the population that is excluded from the selection.
@@ -569,30 +597,56 @@ impl ElitistSelection {
 
 impl<I: Individual> SelectionMechanism<I> for ElitistSelection {
     #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
+    fn sampler<'a>(
+        &'a self,
+        population: &'a Population<I>,
+        _: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
         let selection_bound = interpolate_usize(0, population.len(), self.ratio);
-        self.indices.prepare(selection_bound, population.len());
         let tied = |i: usize| population[i].score() == population[selection_bound].score();
-        self.tied_start = selection_bound;
-        self.tied_end = selection_bound;
+        let mut tied_start = selection_bound;
+        let mut tied_end = selection_bound;
         if selection_bound > 0 && tied(selection_bound - 1) {
-            while self.tied_start > 0 && tied(self.tied_start - 1) {
-                self.tied_start -= 1;
+            while tied_start > 0 && tied(tied_start - 1) {
+                tied_start -= 1;
             }
-            while self.tied_end < population.len() && tied(self.tied_end) {
-                self.tied_end += 1;
+            while tied_end < population.len() && tied(tied_end) {
+                tied_end += 1;
             }
         }
+        Box::new(ElitistSampler {
+            population,
+            indices: uniform_indices(selection_bound..population.len()),
+            tied_start,
+            tied_end,
+        })
+    }
+}
+
+/// The sampler of an [`ElitistSelection`].
+struct ElitistSampler<'a, I: Individual> {
+    population: &'a Population<I>,
+    indices: UniformIndices,
+    // The positions of the individuals whose score equals the score at the selection bound,
+    // when some of them are below the bound; otherwise both are the bound.
+    tied_start: usize,
+    tied_end: usize,
+}
+
+impl<'a, I: Individual> Sampler<'a, I> for ElitistSampler<'a, I> {
+    #[inline]
+    fn population(&self) -> &'a Population<I> {
+        self.population
     }
 
     #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        let mut index = self.indices.sample(population.len(), rng);
+    fn select(&self, rng: &mut Rng) -> (usize, &'a I) {
+        let mut index = self.indices.sample(rng);
         // A selectable individual tied with excluded ones stands for any of them.
         if index < self.tied_end {
             index = rng.random_range(self.tied_start..self.tied_end);
         }
-        (index, &population[index])
+        (index, &self.population[index])
     }
 }
 
@@ -608,7 +662,6 @@ impl<I: Individual> SelectionMechanism<I> for ElitistSelection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinearSelection {
     pressure: f64,
-    weights: WeightedIndex,
 }
 
 impl LinearSelection {
@@ -619,10 +672,7 @@ impl LinearSelection {
     /// inclusive.
     pub fn new(pressure: f64) -> Result<Self, EvolutionError> {
         Self::check_pressure(pressure)?;
-        Ok(Self {
-            pressure,
-            weights: WeightedIndex::default(),
-        })
+        Ok(Self { pressure })
     }
 
     /// Gets the selective pressure.
@@ -655,20 +705,19 @@ impl LinearSelection {
 
 impl<I: Individual> SelectionMechanism<I> for LinearSelection {
     #[inline]
-    fn prepare(&mut self, population: &Population<I>) {
+    fn sampler<'a>(
+        &'a self,
+        population: &'a Population<I>,
+        _: usize,
+    ) -> Box<dyn Sampler<'a, I> + 'a> {
         // The population is sorted from worst to best.
         let n = population.len();
         let last = n.saturating_sub(1).max(1) as f64;
         let s = self.pressure;
-        self.weights.rebuild(
+        WeightedSampler::boxed(
+            population,
             tied_positions(population)
-                .map(|position| (2.0 - s) + 2.0 * (s - 1.0) * position / last),
-        );
-    }
-
-    #[inline]
-    fn select<'a>(&self, population: &'a Population<I>, rng: &mut Rng) -> (usize, &'a I) {
-        let index = self.weights.sample(population.len(), rng);
-        (index, &population[index])
+                .map(move |position| (2.0 - s) + 2.0 * (s - 1.0) * position / last),
+        )
     }
 }

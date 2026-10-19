@@ -269,7 +269,7 @@ fn shuffled_individuals(size: usize) -> Vec<Scored> {
     individuals
 }
 
-/// Measures the selection work of one generation: preparing the mechanism for a population and
+/// Measures the selection work of one generation: creating the sampler of a population and
 /// selecting as many parents as the population has individuals.
 pub fn benchmark_selection_strategies<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
@@ -290,11 +290,11 @@ pub fn benchmark_selection_strategies<M: Measurement>(
     for (name, strategy) in strategies {
         group.bench_function(name, |b| {
             let mut rng = Rng::from_seed(0);
-            let mut selector = strategy.create_selector::<Scored>().unwrap();
+            let selector = strategy.create_selector::<Scored>().unwrap();
             b.iter(|| {
-                selector.prepare(&population);
+                let sampler = selector.sampler(&population, 0);
                 for _ in 0..population_size {
-                    black_box(selector.select(&population, &mut rng));
+                    black_box(sampler.select(&mut rng));
                 }
             });
         });
@@ -391,22 +391,23 @@ pub fn benchmark_generation_steps<M: Measurement>(
         );
     });
 
-    // One offspring per individual, bred sequentially on one thread.
+    // One candidate per individual, bred sequentially on one thread.
     group.bench_function("breed", |b| {
         let mut rng = Rng::from_seed(0);
         let reproduction = ga.reproduction();
+        let parents = reproduction.selector().sampler(population, 0);
         b.iter(|| {
             for _ in 0..population_size {
-                black_box(reproduction.breed(&model, population, &mut rng));
+                black_box(reproduction.breed(&model, &*parents, &mut rng));
             }
         });
     });
 
-    // A full generation of offspring, bred in parallel.
+    // A full generation, bred in parallel and chosen by the survival policy.
     group.bench_function("generate_offspring", |b| {
         let mut rng = Rng::from_seed(0);
         b.iter_batched_ref(
-            || Vec::with_capacity(population_size),
+            || Generation::new(population_size),
             |offspring| ga.generate_offspring(&state, offspring, &mut rng),
             BatchSize::SmallInput,
         );

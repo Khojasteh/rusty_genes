@@ -231,7 +231,7 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
             ));
         }
         let mut state = RunState::started_at(population, started);
-        let mut offspring = Vec::with_capacity(algorithm.population_size());
+        let mut offspring = Generation::new(algorithm.population_size());
 
         let reason = loop {
             if goal_score.is_some_and(|goal| {

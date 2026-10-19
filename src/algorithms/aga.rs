@@ -257,8 +257,8 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
         self.parameters.population_size
     }
 
+    #[inline]
     fn start_run(&mut self) {
-        self.reproduction.reset();
         self.model.start_run();
     }
 
@@ -274,14 +274,13 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
         }
 
         self.model.prepare(state);
-        self.reproduction.prepare(population);
     }
 
     #[inline]
     fn select_elites(
         &self,
         population: &Population<M::Individual>,
-        elites: &mut Vec<M::Individual>,
+        elites: &mut Generation<M::Individual>,
     ) {
         select_fittest(population, self.elite_count, elites);
     }
@@ -290,11 +289,10 @@ impl<M: EvolutionModel> EvolutionAlgorithm for AdaptiveGeneticAlgorithm<M> {
     fn generate_offspring(
         &self,
         state: &RunState<M::Individual>,
-        offspring: &mut Vec<M::Individual>,
+        offspring: &mut Generation<M::Individual>,
         rng: &mut Rng,
     ) {
-        let size = self.population_size();
         self.reproduction
-            .breed_into(&self.model, state.population(), offspring, size, rng);
+            .breed_into(&self.model, state, offspring, rng);
     }
 }

@@ -42,7 +42,7 @@ impl<I: Individual> RunState<I> {
     ///
     /// # Errors
     /// Returns the error of `replace`, such as [`EvolutionError::EmptyPopulation`] from
-    /// [`Population::replace`]. In that case, the counters and the fittest individual so far
+    /// [`Population::advance`]. In that case, the counters and the fittest individual so far
     /// are left unchanged.
     pub fn advance<F>(&mut self, replace: F) -> Result<(), EvolutionError>
     where
