@@ -137,8 +137,11 @@ fn every_selector_uses_minimization_order() {
 }
 
 #[test]
-fn minimizing_roulette_handles_negative_native_scores() {
-    for (scores, expected) in [([-30.0, -20.0, -10.0], [1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0])] {
+fn minimizing_roulette_handles_negative_and_extreme_native_scores() {
+    for (scores, expected) in [
+        ([-30.0, -20.0, -10.0], [1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0]),
+        ([-1e308, 0.0, 1e308], [0.0, 1.0 / 3.0, 2.0 / 3.0]),
+    ] {
         let population = population(&scores, Objective::Minimize);
         let mut selector = RouletteWheelSelection::new();
         selector.prepare(&population);
