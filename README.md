@@ -1,105 +1,108 @@
 # RustyGenes
 
-RustyGenes is a Rust library for building and running evolutionary algorithms, with a focus on
-permutation-based problems, where a solution is an ordering of items. You describe your problem
-as a model, and the library evolves a population of candidate solutions towards a better
-score, breeding each generation in parallel. Models can maximize rewards or minimize costs
-using scores in their own units.
+**Describe a solution. Give it a score. Let evolution search for something better.**
 
-The library provides building blocks rather than a ready-made solver: you choose the operators
-that suit your problem, and you can replace any step of an algorithm with your own.
+RustyGenes is a Rust library for genetic algorithms (GAs). Use it to explore job schedules,
+find useful orderings, or fit numerical parameters. It is especially well equipped for
+permutations, where a solution is an ordering of items, and you can also define your own
+representation.
+
+Start with an algorithm's defaults, then try different ways to combine and vary solutions.
+RustyGenes handles the generation loop and parallel breeding, so you can focus on your problem.
 
 ## Features
 
-- **Algorithms:** a standard genetic algorithm; the adaptive genetic algorithm of Srinivas and
-  Patnaik, which breeds each candidate at crossover and mutation rates that depend on the scores
-  of its parents; and the diversity-guided genetic algorithm of Ursem, which alternates between
-  crossover and mutation as the genetic diversity of the population, which the model measures,
-  falls and rises. Runs stop automatically when the model's goal score is reached.
-- **Selection:** tournament, roulette wheel, Boltzmann, rank, linear, and elitist.
-- **Crossover:** common partition, successor, edge recombination (ERX), partially mapped (PMX),
-  order (OX), cycle (CX), and single-point (SPX). Through
-  `CrossoverStrategy::crossover_with_repetition`, the permutation crossovers also combine
-  genomes in which genes repeat, such as schedules that list each job once per operation.
-- **Mutation:** swap, scramble, inversion, insertion, and duplicate.
-- **Extensibility:** custom models, selection mechanisms, survival policies, and algorithms
-  through traits.
-- **Reproducibility:** a seeded run gives the same result on any number of threads.
+- **Three ways to search.** Choose a standard GA with fixed crossover and mutation probabilities,
+  an adaptive GA that adjusts them to the parents' scores, or a diversity-guided GA that switches
+  between combining solutions and introducing variation.
+- **Plenty of operators to experiment with.** Pick from seven crossover strategies, five mutation
+  strategies, and six ways to select parents. Permutation crossovers also support repeated genes,
+  such as schedules that list each job once per operation.
+- **Scores that make sense.** Maximize rewards or minimize costs, distances, and errors directly
+  in their original units.
+- **Parallel breeding built in.** Candidates are bred and evaluated across threads with Rayon.
+- **Control when to stop.** Set a goal, limit generations, stop after a stretch without
+  improvement, or set a time budget. Every run returns its best solution so far and why it stopped.
+- **Repeatable experiments.** Set a seed to compare changes using repeatable random choices.
+  See [reproducibility](#stopping-and-reproducibility) for the conditions.
+- **Room to make it yours.** Supply your own solution type and model, replace parent selection
+  or survival, add local search, or implement a whole algorithm through traits.
 
-## Installation
+## Try an example
 
-```sh
-cargo add rusty_genes
-```
-
-RustyGenes requires Rust 1.85 or later.
-
-Models use the library's own random number generator, `rusty_genes::Rng`, so they need no
-other dependency. To use the distributions of `rand` 0.10 with it, enable the `rand-0_10`
-feature.
-
-## Quick start
-
-The [OneMax example](examples/one_max.rs) evolves strings of bits towards one in which every bit
-is `1`. Its score is the number of set bits, so a 100-bit solution has a maximum score of 100.
-The example defines the problem's individual and model, and runs the standard genetic algorithm
-on them with its default parameters, which select parents by tournaments of three:
+With Rust 1.85 or later, run this **from a checkout of this repository**:
 
 ```sh
 cargo run --example one_max
 ```
 
-It runs the algorithm with `Evolution::run`, which creates a random initial population and calls
-a closure before each generation. The closure receives the `RunState` of the run, with its
-population, generation number, stagnation, fittest individual so far, and elapsed time, and
-returns `ControlFlow::Break` with a `StopReason` to stop the run; `Limits` stops it after a
-number of generations, generations without improvement, or a time. The model's goal also stops
-the run automatically. OneMax's goal is the genome length, so no score check is needed in the
-closure. `run` returns an `Outcome` with the final state of the run, including the best
-individual of any generation, and the reason it stopped. With a seed, every run gives the same
-result; without it, each run is seeded from the operating system.
+The [OneMax example](examples/one_max.rs) starts with random strings of 100 bits and searches
+for one in which every bit is `1`. Its score is the number of ones, so you know what success
+looks like: a score of 100. The output shows the best score, the number of generations, and
+why the search stopped.
 
-For a more realistic problem, the [flow shop example](examples/flow_shop.rs) orders 20 jobs that
-pass through 5 machines so that the last one finishes as early as possible. It minimizes that
-time in minutes, breeds orders with the order crossover and the insertion mutation, stops when
-the best order stops improving, and compares it with a lower bound that no order can beat. It
-runs the adaptive genetic algorithm, which crosses over and mutates each order at rates that
-depend on the makespans of its parents, and selects parents by its default roulette wheel:
+The examples each show a different representation and algorithm. Read them in this order:
+
+| Example | What you search for | What it teaches |
+| --- | --- | --- |
+| [OneMax](examples/one_max.rs) | A bit string with as many ones as possible | The basic GA loop, maximization, and a known goal |
+| [Flow shop](examples/flow_shop.rs) | A job order with a short completion time | Permutations, minimization, and adaptive breeding rates |
+| [Curve fitting](examples/curve_fitting.rs) | Four parameters that fit noisy measurements | Real-valued genomes, custom operators, and diversity-guided search |
+
+For the larger examples, use a release build:
 
 ```sh
 cargo run --release --example flow_shop
-```
-
-The [curve fitting example](examples/curve_fitting.rs) solves a problem that is not a
-permutation: it fits the four parameters of a damped oscillation to 60 noisy measurements by
-minimizing the error of the curve. Its solutions are real numbers within bounds, so it defines
-its own crossover and mutation and hashes its parameters with `hash_f64_slice`. It runs the
-diversity-guided genetic algorithm, measuring how far its solutions lie from their average point
-with `distance_to_average_point`, and selects parents by its default binary tournaments. The
-algorithm's default diversity thresholds suit real-valued solutions like these; for genomes of
-bits or permutations, its documentation explains how to raise the low threshold so that the
-algorithm still mutates:
-
-```sh
 cargo run --release --example curve_fitting
 ```
 
-Each example takes options that size its problem and set its population, generation limit, time
-limit, and seed, which makes it suitable for measuring the library on larger problems. A time
-limit makes the result depend on the speed of the machine, so a seeded run that it stops may
-not repeat. The options keep
-the problem and the result above by default, and `--help` lists them:
+Each file starts with the search setup in `main`, followed by the solution representation and
+model. Command-line parsing lives at the end. Use `--help` to see the problem sizes, search
+limits, and seed you can change:
 
 ```sh
-cargo run --release --example flow_shop -- --jobs 500 --machines 20 --population 200
+cargo run --example one_max -- --help
+cargo run --release --example flow_shop -- --jobs 50 --machines 10 --population 200
 ```
 
-## Defining your own problem
+A GA searches for good solutions; it does not generally prove they are optimal. The flow shop
+example compares its result with a lower bound. The curve fitting example compares with the
+parameters used to generate the noisy data, which need not be the best fit to that data.
 
-A problem consists of an individual, which holds a candidate solution and its score, and a
-model, which creates, combines, varies, and evaluates individuals. This example evolves a
-permutation of the numbers `0..n` towards ascending order by minimizing the number of misplaced
-items. Its score is a count, without normalization or negation:
+## How the pieces fit
+
+An **individual** is one candidate solution. Its **genome** is the data describing that solution:
+a bit string, a job order, or a set of numbers. A **population** is a group of distinct, valid
+individuals. A score tells the algorithm which ones are better.
+
+A genetic algorithm repeats a few steps to build each new **generation**:
+
+1. **Select parents:** favor promising solutions from the current population.
+2. **Breed candidates:** crossover combines parts of two parents; mutation changes a candidate
+   to introduce variation.
+3. **Evaluate and choose survivors:** score the candidates and decide which solutions continue.
+
+Your `EvolutionModel` defines crossover, mutation, and scoring for your problem.
+The algorithm decides when to apply these operations and which solutions survive.
+By default, a candidate competes with its fitter parent; a valid candidate that is at least as
+fit can survive. **Elitism** also reserves places for copies of the best current individuals.
+
+`Evolution` runs this loop. A progress callback sees its `RunState`, and the returned `Outcome`
+holds the final state, the best individual from any generation, and the stopping reason.
+
+## Use it in your project
+
+Add the library to your Cargo project:
+
+```sh
+cargo add rusty_genes
+```
+
+Models use the library's `Rng`, so you do not need a separate random-number dependency.
+To use distributions from `rand` 0.10, enable the `rand-0_10` feature.
+
+Here is a complete model that searches for an ascending order of the numbers `0..n`.
+Each misplaced number adds one to the score, so a perfectly sorted order has a score of zero:
 
 ```rust
 use rusty_genes::*;
@@ -111,7 +114,7 @@ struct Arrangement {
     score: f64,
 }
 
-// An arrangement is identified by its order alone, not by its cached score.
+// The genome is the order itself. Scoring it must not change its identity.
 impl PartialEq for Arrangement {
     fn eq(&self, other: &Self) -> bool {
         self.order == other.order
@@ -130,12 +133,15 @@ impl Individual for Arrangement {
     }
 }
 
-// The argument is the number of items to arrange.
+// Start with a random ordering of all the numbers, each appearing once.
 impl RandomIndividual<usize> for Arrangement {
     fn new_random(len: &usize, rng: &mut Rng) -> Self {
         let mut order = (0..*len).collect::<Vec<_>>();
         rng.shuffle(&mut order);
-        Self { order, score: f64::NAN }
+        Self {
+            order,
+            score: f64::NAN,
+        }
     }
 }
 
@@ -153,8 +159,12 @@ impl EvolutionModel for Sorting {
     }
 
     fn crossover(&self, a: &Arrangement, b: &Arrangement, rng: &mut Rng) -> Arrangement {
+        // This crossover preserves a permutation: no number is lost or repeated.
         let order = CrossoverStrategy::PartiallyMapped.crossover(&a.order, &b.order, rng);
-        Arrangement { order, score: f64::NAN }
+        Arrangement {
+            order,
+            score: f64::NAN,
+        }
     }
 
     fn mutate(&self, individual: &mut Arrangement, rng: &mut Rng) {
@@ -164,87 +174,91 @@ impl EvolutionModel for Sorting {
 
     // Lower scores mean fewer misplaced numbers.
     fn evaluate(&self, individual: &mut Arrangement) {
-        let misplaced = individual.order.iter().enumerate().filter(|(i, n)| i != *n).count();
+        let misplaced = individual
+            .order
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| i != *n)
+            .count();
         individual.score = misplaced as f64;
     }
 }
 
-let mut evolution = GeneticAlgorithm::new(Sorting, Default::default())
-    .expect("the parameters are valid")
-    .into_evolution();
-let limits = Limits::new().generations(100);
-let solution = evolution
-    .run(&20, |state| limits.check(state))
-    .expect("random arrangements are valid")
-    .into_fittest_so_far();
+fn main() -> Result<(), EvolutionError> {
+    let mut evolution = GeneticAlgorithm::new(Sorting, Default::default())?
+        .into_evolution()
+        .with_seed(42);
 
-println!("{:?} has score {}", solution.order, solution.score());
+    // Stop after 100 generations, or sooner if the model reaches its zero-error goal.
+    let limits = Limits::new().generations(100);
+    let outcome = evolution.run(&20, |state| limits.check(state))?;
+
+    println!("Stopped: {}", outcome.reason());
+    let solution = outcome.into_fittest_so_far();
+    println!("{:?} has score {}", solution.order, solution.score());
+    Ok(())
+}
 ```
 
-Keep these in mind when you define a model:
+When adapting this to your problem:
 
-- Models maximize scores by default. Override `EvolutionModel::objective` to return
-  `Objective::Minimize` when lower scores are better. `Individual::score` returns the raw
-  score in either case; any finite `f64` is supported, including negative values. OneMax uses
-  the number of set bits, while the sorting example uses the number of misplaced items.
-- Override `EvolutionModel::goal_score` to return an optional finite target. It receives the
-  evaluated initial population and is called once per run. Maximization stops at or above the
-  target; minimization stops at or below it. The default `None` leaves stopping to the callback.
-  Keep a generation or stagnation limit for problems that may never reach their goal.
-- Populations are ordered from worst to best under their objective. `fittest`, the run's
-  `fittest_so_far`, elites, selection, and survival follow that direction. `stats().min()`,
-  `max()`, and `avg()` always describe the numerical scores in their original units.
-- Roulette-wheel and Boltzmann selection derive probabilities internally. For minimization,
-  roulette weights are proportional to `max(0, maximum score) - score`, with uniform selection
-  when all weights are zero. Boltzmann probabilities are proportional to `exp(-score / T)`,
-  where the temperature `T` is expressed in the score's units. Tournament and rank-based
-  selectors use ordering alone.
-- An individual whose score is not finite is invalid and never joins the population. Override
-  `Individual::is_valid` to reject other infeasible solutions.
-- Implement `PartialEq` and `Hash` on the genome alone, excluding the cached score, as in the
-  example. Equal individuals must have equal hashes. Populations remove duplicates by comparing
-  only individuals with equal hashes; when equal genomes have different scores, they keep the
-  better evaluation under the population's objective. `f64` has no `Hash`; hash floating-point
-  genes with `hash_f64` or `hash_f64_slice`, which agree with `==`. A constant hash is valid for
-  a genome that cannot be hashed, but deduplication then compares every pair, in quadratic time.
-- Use an invalid score until a new or changed genome has been evaluated; the engine evaluates
-  the initial population and every offspring before admitting them.
-- Individuals are bred and evaluated on several threads, so the model must be `Sync`.
-- The model describes the problem only; the algorithm decides how parents are selected and
-  which offspring survive.
+- Put the candidate's data in your individual type and return its cached score from
+  `Individual::score`. A new or changed genome can use `f64::NAN` until it is evaluated.
+- Use `Objective::Minimize` for costs or errors. The default is `Objective::Maximize`.
+  Any finite score is supported, including negative values.
+- Define equality and hashing using the genome, excluding its cached score. This lets the
+  population remove duplicates. For floating-point genomes, `hash_f64` and `hash_f64_slice`
+  provide hashes consistent with `==`.
+- Keep scores non-finite for invalid solutions, or override `Individual::is_valid` to reject
+  other infeasible candidates. Models are shared during parallel breeding and must be `Sync`.
 
-## Customizing breeding
+## Stopping and reproducibility
 
-The algorithms breed each generation through a `Reproduction`, which selects parents, applies
-the model's operators to breed candidates, and lets its survival policy choose the next
-generation from the population and the candidates. Both parts can be replaced, including by
-your own implementations of `SelectionMechanism` and `SurvivalPolicy`:
+`Limits` can combine a generation limit, a stagnation limit, and a time limit. **Stagnation**
+counts generations since the best score of the entire run last improved. Generation zero is
+the initial population; a limit of 100 allows up to 100 generations to be bred after it.
+
+Set `EvolutionModel::goal_score` when you have a target: maximization stops at or above it,
+minimization at or below it. The goal is checked before the progress callback, so the callback
+does not see the generation that reaches it. You can inspect that generation in the outcome.
+
+Time limits are checked between generations, so a generation can run past the budget.
+With the same library version, input, and seed, runs give the same result across thread counts
+when the model and algorithm use the supplied generators for random choices, reset any adapted
+state in their `start_run` hooks, and are otherwise deterministic. The callback must also make
+the same stopping decisions. A run stopped by elapsed time may differ because its stopping
+point depends on the machine.
+
+## Make the search your own
+
+The sorting example uses the algorithm's default settings. Once your model is working, you
+can tune the search through its parameters: change the population size, crossover and mutation
+probabilities, elitism, or the way parents are selected.
+
+For example, to select parents using tournaments of four, start with the defaults and change
+the selection strategy:
 
 ```rust
 use rusty_genes::*;
 
-/// Creates a genetic algorithm for `model` that selects parents by tournaments of four, and in
-/// which every valid candidate survives, instead of competing with its parents.
-fn generational_tournament<M: EvolutionModel>(
-    model: M,
-) -> Result<GeneticAlgorithm<M>, EvolutionError> {
-    let mut ga = GeneticAlgorithm::new(model, Default::default())?;
-    ga.reproduction_mut().set_survival(Generational);
-    ga.reproduction_mut().set_selector(TournamentSelection::new(4)?);
-    Ok(ga)
-}
+let mut parameters = GeneticAlgorithmParameters::default();
+parameters.selection_strategy = SelectionStrategy::Tournament(4);
 ```
 
-## Documentation
+Pass these parameters to `GeneticAlgorithm::new(model, parameters)`. The other settings keep
+their default values, and the model stays the same.
 
-The [API documentation](https://docs.rs/rusty_genes) describes every algorithm, operator, and
-parameter, and the [changelog](CHANGELOG.md) lists the changes in each release.
+When you need behavior beyond the built-in settings, you can supply custom parent selectors
+and survival policies through `Reproduction`, or add local search with `EvolutionModel::improve`.
+For control over the steps of each generation, implement `EvolutionAlgorithm`.
+
+The [API documentation](https://docs.rs/rusty_genes) covers the strategies and their parameters,
+and the [changelog](CHANGELOG.md) explains changes between versions.
+
+If you are new to genetic algorithms, start with OneMax, change one setting, and see how the
+search responds. The same building blocks are ready when you move to your own problem.
 
 ## License
 
-RustyGenes is licensed under the [MIT License](LICENSE).
-
-## Disclaimer
-
-RustyGenes is still evolving, and its API may change between releases. Please use it at your own
-risk.
+RustyGenes is licensed under the [MIT License](LICENSE). The library is still evolving;
+its API may change between releases.
