@@ -180,14 +180,24 @@ struct WeightedIndex {
 
 impl WeightedIndex {
     fn rebuild(&mut self, weights: impl Iterator<Item = f64>) {
-        let mut total = 0.0;
         self.cumulative_weights.clear();
-        self.cumulative_weights.extend(weights.map(|weight| {
-            if weight > 0.0 && weight.is_finite() {
-                total += weight;
+        let mut largest: f64 = 0.0;
+        for weight in weights {
+            let weight = if weight > 0.0 && weight.is_finite() {
+                weight
+            } else {
+                0.0
+            };
+            largest = largest.max(weight);
+            self.cumulative_weights.push(weight);
+        }
+        if largest > 0.0 {
+            let mut total = 0.0;
+            for weight in &mut self.cumulative_weights {
+                total += *weight / largest;
+                *weight = total;
             }
-            total
-        }));
+        }
     }
 
     fn sample(&self, len: usize, rng: &mut Rng) -> usize {
@@ -281,6 +291,8 @@ impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
 /// probabilities become proportional to the distance from the least fit individual, which is
 /// never selected unless all individuals have the same score. If all weights are zero, every
 /// individual is equally likely to be selected.
+/// Differences are formed before scaling to preserve nearby scores. When their range would
+/// overflow, scores are halved first. Weights are scaled before summing to avoid overflow.
 /// For minimization the same rule is applied to the negated scores internally: weights are
 /// proportional to `max(0, maximum score) - score`. Stored scores are unchanged.
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -300,10 +312,16 @@ impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
     fn prepare(&mut self, population: &Population<I>) {
         let objective = population.objective();
         let offset = objective.as_maximized(population[0].score()).min(0.0);
+        let best = objective.as_maximized(population.fittest().score());
+        let factor = if (best - offset).is_infinite() {
+            0.5
+        } else {
+            1.0
+        };
         self.weights.rebuild(
             population
                 .iter()
-                .map(|i| objective.as_maximized(i.score()) - offset),
+                .map(|i| objective.as_maximized(i.score()) * factor - offset * factor),
         );
     }
 
@@ -325,8 +343,9 @@ impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
 /// original units. The temperature therefore has the same units as the score.
 ///
 /// The first population of a run is selected from at the initial temperature, and the
-/// temperature is multiplied by the cooling rate after each population. The weights are computed
-/// relative to the fittest individual, so they cannot overflow at any temperature.
+/// temperature is multiplied by the cooling rate after each population, bounded to the
+/// positive finite `f64` range. The weights are computed relative to the fittest
+/// individual, so they cannot overflow at any temperature.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoltzmannSelection {
     initial_temperature: f64,
@@ -413,15 +432,21 @@ impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
     #[inline]
     fn prepare(&mut self, population: &Population<I>) {
         // Subtracting the best score gives non-positive exponents in either direction.
-        let temperature = self.temperature.max(f64::MIN_POSITIVE);
+        let temperature = self.temperature;
         let objective = population.objective();
         let best = objective.as_maximized(population.fittest().score());
-        self.weights.rebuild(
-            population
-                .iter()
-                .map(|i| ((objective.as_maximized(i.score()) - best) / temperature).exp()),
-        );
-        self.temperature = (self.temperature * self.cooling_rate).max(f64::MIN_POSITIVE);
+        self.weights.rebuild(population.iter().map(|i| {
+            let score = objective.as_maximized(i.score());
+            let difference = score - best;
+            let exponent = if difference.is_finite() {
+                difference / temperature
+            } else {
+                score / temperature - best / temperature
+            };
+            exponent.exp()
+        }));
+        self.temperature =
+            (self.temperature * self.cooling_rate).clamp(f64::from_bits(1), f64::MAX);
     }
 
     #[inline]
@@ -706,6 +731,25 @@ mod tests {
     }
 
     #[test]
+    fn roulette_preserves_probabilities_at_large_score_scales() {
+        for (scores, expected) in [
+            (vec![-1e308, 0.0, 1e308], vec![0.0, 1.0 / 3.0, 2.0 / 3.0]),
+            (vec![8e307, 1.6e308], vec![1.0 / 3.0, 2.0 / 3.0]),
+            (vec![0.0, 1e-308, 2e-308], vec![0.0, 1.0 / 3.0, 2.0 / 3.0]),
+        ] {
+            let population = Population::new(
+                scores
+                    .into_iter()
+                    .map(|score| MockIndividual { score })
+                    .collect(),
+            )
+            .unwrap();
+            let observed = observed_probabilities(&mut RouletteWheelSelection::new(), &population);
+            assert_probabilities(&observed, |index| expected[index]);
+        }
+    }
+
+    #[test]
     fn test_rank_selection_probabilities() {
         let mut rank = RankSelection::new();
         let population = create_test_population();
@@ -798,5 +842,64 @@ mod tests {
         assert!(ElitistSelection::new(1.0).is_err());
         assert!(SelectionStrategy::Linear(f64::NAN).validate().is_err());
         assert!(SelectionStrategy::Rank.validate().is_ok());
+    }
+
+    #[test]
+    fn roulette_preserves_adjacent_score_differences() {
+        let center = 1.5_f64;
+        let scores = [
+            -center,
+            -f64::from_bits(center.to_bits() - 1),
+            -f64::from_bits(center.to_bits() - 2),
+        ];
+        let population = Population::new(
+            scores
+                .into_iter()
+                .map(|score| MockIndividual { score })
+                .collect(),
+        )
+        .unwrap();
+        let observed = observed_probabilities(&mut RouletteWheelSelection::new(), &population);
+        assert_probabilities(&observed, |index| index as f64 / 3.0);
+    }
+
+    #[test]
+    fn boltzmann_scales_overflowing_differences_before_exponentiation() {
+        let population = Population::new(vec![
+            MockIndividual { score: -1e308 },
+            MockIndividual { score: 1e308 },
+        ])
+        .unwrap();
+        let observed = observed_probabilities(
+            &mut BoltzmannSelection::new(1e308, 1.0).unwrap(),
+            &population,
+        );
+        let lower = (-2.0_f64).exp();
+        assert_probabilities(&observed, |index| {
+            if index == 0 {
+                lower / (1.0 + lower)
+            } else {
+                1.0 / (1.0 + lower)
+            }
+        });
+    }
+
+    #[test]
+    fn boltzmann_preserves_probabilities_in_subnormal_score_units() {
+        let unit = f64::from_bits(1);
+        let population = Population::new(
+            [0.0, unit, 2.0 * unit]
+                .into_iter()
+                .map(|score| MockIndividual { score })
+                .collect(),
+        )
+        .unwrap();
+        let mut boltzmann = BoltzmannSelection::new(unit, 0.5).unwrap();
+        for _ in 0..2 {
+            let observed = observed_probabilities(&mut boltzmann, &population);
+            let total = (-2.0_f64).exp() + (-1.0_f64).exp() + 1.0;
+            assert_probabilities(&observed, |index| ((index as f64) - 2.0).exp() / total);
+            assert_eq!(boltzmann.temperature(), unit);
+        }
     }
 }
