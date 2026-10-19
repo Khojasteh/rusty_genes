@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use std::{
     hash::{BuildHasher, BuildHasherDefault},
     ops::Deref,
+    sync::OnceLock,
 };
 
 /// Represents a population of individuals in an evolutionary algorithm.
@@ -18,7 +19,7 @@ use std::{
 /// [`RunState`] that holds the population.
 pub struct Population<I: Individual> {
     individuals: Vec<I>,
-    stats: PopulatedStats,
+    stats: OnceLock<PopulatedStats>,
     objective: Objective,
 }
 
@@ -49,10 +50,10 @@ impl<I: Individual> Population<I> {
         mut individuals: Vec<I>,
         objective: Objective,
     ) -> Result<Self, EvolutionError> {
-        let stats = normalize(&mut individuals, objective)?;
+        normalize(&mut individuals, objective)?;
         Ok(Self {
             individuals,
-            stats,
+            stats: OnceLock::new(),
             objective,
         })
     }
@@ -66,9 +67,9 @@ impl<I: Individual> Population<I> {
     /// Returns [`EvolutionError::EmptyPopulation`] if `offspring` contains no valid individual.
     /// In that case, the population is left unchanged and `offspring` is left empty.
     pub fn replace(&mut self, offspring: &mut Vec<I>) -> Result<(), EvolutionError> {
-        let stats = normalize(offspring, self.objective)?;
+        normalize(offspring, self.objective)?;
         std::mem::swap(&mut self.individuals, offspring);
-        self.stats = stats;
+        self.stats = OnceLock::new();
         Ok(())
     }
 
@@ -82,9 +83,15 @@ impl<I: Individual> Population<I> {
     ///
     /// Minimum and maximum mean the numerical extrema, independently of the objective; use
     /// [`fittest`](Self::fittest) for the best individual under that objective.
+    ///
+    /// The statistics are computed when they are first requested, so runs that do not use them
+    /// do not pay for them.
     #[inline]
     pub fn stats(&self) -> &PopulatedStats {
-        &self.stats
+        self.stats.get_or_init(|| {
+            PopulatedStats::of_sorted(&self.individuals, I::score)
+                .expect("a population is never empty")
+        })
     }
 
     /// Returns the fittest individual in the population.
@@ -125,23 +132,24 @@ impl<I: Individual> From<Population<I>> for Vec<I> {
     }
 }
 
-/// Removes invalid and duplicate individuals, sorts the rest by score, and collects the
-/// statistics of their scores.
+/// Removes invalid and duplicate individuals and sorts the rest by score.
+///
+/// # Errors
+/// Returns [`EvolutionError::EmptyPopulation`] if no individual remains.
 fn normalize<I: Individual>(
     individuals: &mut Vec<I>,
     objective: Objective,
-) -> Result<PopulatedStats, EvolutionError> {
+) -> Result<(), EvolutionError> {
     individuals.retain(Individual::is_valid);
     // A stable sort keeps individuals with equal score in their given order, which keeps runs
     // reproducible.
     individuals.par_sort_by(|a, b| objective.cmp_fitness(a.score(), b.score()));
     remove_duplicates(individuals);
-    individuals
-        .iter()
-        .map(Individual::score)
-        .collect::<Stats>()
-        .snapshot()
-        .ok_or(EvolutionError::EmptyPopulation)
+    if individuals.is_empty() {
+        Err(EvolutionError::EmptyPopulation)
+    } else {
+        Ok(())
+    }
 }
 
 /// Removes duplicate individuals from a vector that is sorted by score, keeping the order of the
@@ -327,6 +335,20 @@ mod tests {
             Population::new(vec![mock(1, f64::NAN)]).err(),
             Some(EvolutionError::EmptyPopulation)
         );
+    }
+
+    #[test]
+    fn replace_recomputes_the_statistics_of_the_new_generation() {
+        let mut population = Population::new(vec![mock(1, 1.0), mock(2, 3.0)]).unwrap();
+        assert_eq!(population.stats().avg(), 2.0);
+
+        population
+            .replace(&mut vec![mock(3, 5.0), mock(4, 9.0), mock(5, 7.0)])
+            .unwrap();
+        let stats = population.stats();
+        assert_eq!(stats.count(), 3);
+        assert_eq!((stats.min(), stats.max(), stats.avg()), (5.0, 9.0, 7.0));
+        assert_eq!((stats.arg_min(), stats.arg_max()), (0, 2));
     }
 
     #[test]
