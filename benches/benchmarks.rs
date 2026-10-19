@@ -92,6 +92,48 @@ pub fn benchmark_crossover_strategies<M: Measurement>(
     });
 }
 
+/// Measures crossing over genomes that hold each of `gene_count` genes `copies` times, such as
+/// schedules that list each job once per operation. The copies of each gene are numbered so
+/// that the strategies for permutations apply.
+pub fn benchmark_crossover_with_repetition<M: Measurement>(
+    mut group: BenchmarkGroup<'_, M>,
+    gene_count: usize,
+    copies: usize,
+) {
+    let mut genome1 =
+        Vec::from_iter((0..gene_count).flat_map(|gene| std::iter::repeat_n(gene, copies)));
+    let mut genome2 = genome1.clone();
+    {
+        let mut rng = Rng::from_seed(0);
+        rng.shuffle(&mut genome1);
+        rng.shuffle(&mut genome2);
+    }
+    let strategies = [
+        ("CommonPartition", CrossoverStrategy::CommonPartition),
+        ("Successor", CrossoverStrategy::Successor),
+        ("ERX", CrossoverStrategy::EdgeRecombination),
+        ("PMX", CrossoverStrategy::PartiallyMapped),
+        ("OX", CrossoverStrategy::Order),
+        ("CX", CrossoverStrategy::Cycle),
+        ("SPX", CrossoverStrategy::SinglePoint),
+    ];
+
+    group.throughput(Throughput::Elements(genome1.len() as u64));
+
+    for (name, strategy) in strategies {
+        group.bench_function(name, |b| {
+            let mut rng = Rng::from_seed(0);
+            b.iter(|| {
+                strategy.crossover_with_repetition(
+                    black_box(&genome1),
+                    black_box(&genome2),
+                    &mut rng,
+                )
+            });
+        });
+    }
+}
+
 pub fn benchmark_mutation_strategies<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     genome_length: usize,
@@ -435,6 +477,11 @@ pub fn benchmark(c: &mut Criterion) {
 
     benchmark_crossover_strategies(c.benchmark_group("Crossover (1K genes)"), 1000);
     benchmark_crossover_strategies(c.benchmark_group("Crossover (100 genes)"), 100);
+    benchmark_crossover_with_repetition(
+        c.benchmark_group("Crossover with repetition (100 genes, 10 copies)"),
+        100,
+        10,
+    );
     benchmark_mutation_strategies(c.benchmark_group("Mutation (1K genes)"), 1000);
     benchmark_operator_helpers(c.benchmark_group("Operator helpers (1K genes)"), 1000);
     benchmark_selection_strategies(c.benchmark_group("Selection (100 individuals)"), 100);

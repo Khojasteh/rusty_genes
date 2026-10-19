@@ -3,6 +3,16 @@ use rusty_genes::*;
 const PARENT1: [u32; 10] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 const PARENT2: [u32; 10] = [8, 9, 0, 7, 4, 5, 6, 3, 2, 1];
 
+const STRATEGIES: [CrossoverStrategy; 7] = [
+    CrossoverStrategy::CommonPartition,
+    CrossoverStrategy::Successor,
+    CrossoverStrategy::EdgeRecombination,
+    CrossoverStrategy::PartiallyMapped,
+    CrossoverStrategy::Order,
+    CrossoverStrategy::Cycle,
+    CrossoverStrategy::SinglePoint,
+];
+
 #[test]
 fn order_crossover_with_empty_range_copies_second_parent() {
     for start in 0..=PARENT1.len() {
@@ -31,6 +41,40 @@ fn permutation_crossovers_produce_permutations_of_the_parents() {
             let mut offspring = strategy.crossover(&PARENT1, &PARENT2, &mut rng);
             offspring.sort_unstable();
             assert_eq!(offspring, PARENT1.to_vec(), "{strategy:?}");
+        }
+    }
+}
+
+#[test]
+fn crossovers_with_repetition_keep_the_number_of_copies_of_each_gene() {
+    // Three jobs of three operations each, in the order the parents schedule them.
+    let parent1 = [0, 0, 0, 1, 1, 1, 2, 2, 2];
+    let parent2 = [2, 1, 0, 1, 2, 0, 0, 2, 1];
+    let mut rng = Rng::from_seed(0);
+
+    // Single-point crossover keeps positions rather than genes, so it is not among them.
+    for strategy in STRATEGIES {
+        if strategy == CrossoverStrategy::SinglePoint {
+            continue;
+        }
+        for _ in 0..100 {
+            let mut offspring = strategy.crossover_with_repetition(&parent1, &parent2, &mut rng);
+            offspring.sort_unstable();
+            assert_eq!(offspring, parent1.to_vec(), "{strategy:?}");
+        }
+    }
+}
+
+#[test]
+fn crossovers_with_repetition_of_distinct_genes_are_the_crossovers() {
+    for strategy in STRATEGIES {
+        let (mut rng, mut repeated_rng) = (Rng::from_seed(0), Rng::from_seed(0));
+        for _ in 0..100 {
+            assert_eq!(
+                strategy.crossover_with_repetition(&PARENT1, &PARENT2, &mut repeated_rng),
+                strategy.crossover(&PARENT1, &PARENT2, &mut rng),
+                "{strategy:?}"
+            );
         }
     }
 }

@@ -16,7 +16,9 @@ that suit your problem, and you can replace any step of an algorithm with your o
   when the model's goal score is reached.
 - **Selection:** tournament, roulette wheel, Boltzmann, rank, linear, and elitist.
 - **Crossover:** common partition, successor, edge recombination (ERX), partially mapped (PMX),
-  order (OX), cycle (CX), and single-point (SPX).
+  order (OX), cycle (CX), and single-point (SPX). Through
+  `CrossoverStrategy::crossover_with_repetition`, the permutation crossovers also combine
+  genomes in which genes repeat, such as schedules that list each job once per operation.
 - **Mutation:** swap, scramble, inversion, insertion, and duplicate.
 - **Extensibility:** custom models, selection mechanisms, survival policies, and algorithms
   through traits.
