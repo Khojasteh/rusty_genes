@@ -2,30 +2,32 @@ use crate::Rng;
 
 /// Represents an individual in a population of an evolutionary algorithm.
 ///
-/// # Note
-/// An individual is characterized by its fitness score, which measures how well it performs
-/// the task or problem that the evolutionary algorithm is trying to optimize. The library
-/// maximizes the fitness score.
+/// The model's [`objective`](crate::EvolutionModel::objective) determines whether lower or
+/// higher scores are better. The engine evaluates candidates before admitting them to a
+/// population, so new or changed genomes may carry an invalid score until then.
+///
+/// Equality determines whether individuals are duplicates in a [`Population`](crate::Population).
+/// It may compare only the solution itself, excluding a cached score.
 pub trait Individual: Clone + PartialEq + Send + Sync {
-    /// Gets the fitness score of the individual.
+    /// Returns the cached evaluation in the model's own units, without evaluating the genome.
     ///
-    /// # Note
-    /// A higher fitness score indicates that the individual is better suited to the task or
-    /// problem being optimized. The score may be negative.
-    fn fitness(&self) -> f64;
+    /// The score may be negative or outside `[0, 1]`.
+    /// It must be finite for a valid individual. The model's [`Objective`](crate::Objective)
+    /// determines whether lower or higher scores are better.
+    fn score(&self) -> f64;
 
     /// Returns [`true`] if the individual is a valid solution. Invalid individuals never become
     /// part of a [`Population`](crate::Population).
     ///
     /// # Note
-    /// The default implementation considers an individual valid when its fitness score is finite,
+    /// The default implementation considers an individual valid when its score is finite,
     /// i.e. neither infinite nor NaN.
     ///
     /// Implementations of this trait may override this method with a more specific definition of
-    /// validity, but an individual whose fitness is not finite must never be reported as valid.
+    /// validity, but an individual whose score is not finite must never be reported as valid.
     #[inline]
     fn is_valid(&self) -> bool {
-        self.fitness().is_finite()
+        self.score().is_finite()
     }
 }
 

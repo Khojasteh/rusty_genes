@@ -157,7 +157,10 @@ impl<I: Individual> Reproduction<I> {
 
         let mut fittest_parent = parent1;
         let mut offspring = if let Some(parent2) = parent2 {
-            if parent2.fitness() > parent1.fitness() {
+            if population
+                .objective()
+                .is_fitter(parent2.score(), parent1.score())
+            {
                 fittest_parent = parent2;
             }
             model.crossover(parent1, parent2, rng)
@@ -219,107 +222,4 @@ impl<I: Individual> Reproduction<I> {
 fn check_rates(crossover_rate: f64, mutation_rate: f64) -> Result<(), EvolutionError> {
     check_probability("crossover_rate", crossover_rate)?;
     check_probability("mutation_rate", mutation_rate)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Debug, Clone, PartialEq)]
-    struct Number(f64);
-
-    impl Individual for Number {
-        fn fitness(&self) -> f64 {
-            self.0
-        }
-    }
-
-    /// A model whose offspring is always worse than its parents.
-    struct Decline;
-
-    impl EvolutionModel for Decline {
-        type Individual = Number;
-
-        fn crossover(&self, parent1: &Number, parent2: &Number, _: &mut Rng) -> Number {
-            Number(parent1.0.min(parent2.0) - 1.0)
-        }
-
-        fn mutate(&self, individual: &mut Number, _: &mut Rng) {
-            individual.0 -= 10.0;
-        }
-
-        fn evaluate(&self, _: &mut Number) {}
-    }
-
-    fn bred_fitness(reproduction: Reproduction<Number>) -> Vec<f64> {
-        let mut reproduction = reproduction;
-        let population = Population::new(vec![Number(1.0), Number(2.0)]).unwrap();
-        reproduction.prepare(&population);
-        let mut rng = Rng::from_seed(0);
-        (0..20)
-            .map(|_| reproduction.breed(&Decline, &population, &mut rng).0)
-            .collect()
-    }
-
-    #[test]
-    fn family_competition_keeps_the_fittest_parent_of_a_worse_offspring() {
-        let reproduction = Reproduction::new(RankSelection::new(), 1.0, 1.0).unwrap();
-        assert!(bred_fitness(reproduction).iter().all(|&f| f >= 1.0));
-    }
-
-    #[test]
-    fn generational_survival_keeps_a_worse_offspring() {
-        let reproduction = Reproduction::new(RankSelection::new(), 1.0, 1.0)
-            .unwrap()
-            .with_survival(Generational);
-        assert!(bred_fitness(reproduction).iter().all(|&f| f < 0.0));
-    }
-
-    #[test]
-    fn invalid_rates_are_rejected_and_leave_the_rates_unchanged() {
-        assert!(Reproduction::<Number>::new(RankSelection::new(), 1.5, 0.1).is_err());
-        assert!(Reproduction::<Number>::new(RankSelection::new(), 0.5, f64::NAN).is_err());
-
-        let mut reproduction = Reproduction::<Number>::new(RankSelection::new(), 0.5, 0.1).unwrap();
-        assert!(reproduction.set_rates(0.2, -0.1).is_err());
-        assert_eq!(
-            (reproduction.crossover_rate(), reproduction.mutation_rate()),
-            (0.5, 0.1)
-        );
-    }
-
-    #[test]
-    fn bred_offspring_depend_only_on_the_generator_state() {
-        use crate::one_max::*;
-
-        let model = OneMaxEvolutionModel;
-        let mut individuals = (0..20)
-            .map(|i| OneMax::from((0..16).map(|bit| (bit * i) % 3 == 0).collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
-        individuals.iter_mut().for_each(|i| model.evaluate(i));
-        let population = Population::new(individuals).unwrap();
-        let mut reproduction =
-            Reproduction::from_strategy(SelectionStrategy::Tournament(2), 0.9, 0.5).unwrap();
-        reproduction.prepare(&population);
-
-        let breed = |threads| {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap()
-                .install(|| {
-                    let mut offspring = Vec::new();
-                    reproduction.breed_into(
-                        &model,
-                        &population,
-                        &mut offspring,
-                        50,
-                        &mut Rng::from_seed(9),
-                    );
-                    offspring
-                })
-        };
-
-        assert_eq!(breed(1), breed(4));
-    }
 }

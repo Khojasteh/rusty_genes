@@ -182,25 +182,25 @@ pub fn benchmark_operator_helpers<M: Measurement>(
     });
 }
 
-/// An individual with a given identity and fitness, for benchmarks that need no genome.
+/// An individual with a given identity and score, for benchmarks that need no genome.
 #[derive(Debug, Clone, PartialEq)]
 struct Scored {
     id: usize,
-    fitness: f64,
+    score: f64,
 }
 
 impl Individual for Scored {
-    fn fitness(&self) -> f64 {
-        self.fitness
+    fn score(&self) -> f64 {
+        self.score
     }
 }
 
-/// Returns `size` individuals with distinct fitness scores, in random order.
+/// Returns `size` individuals with distinct scores, in random order.
 fn shuffled_individuals(size: usize) -> Vec<Scored> {
     let mut individuals = (0..size)
         .map(|id| Scored {
             id,
-            fitness: id as f64 / size as f64,
+            score: id as f64 / size as f64,
         })
         .collect::<Vec<_>>();
     Rng::from_seed(0).shuffle(&mut individuals);
@@ -240,27 +240,27 @@ pub fn benchmark_selection_strategies<M: Measurement>(
 }
 
 /// Measures creating a population, which validates, sorts, and deduplicates the individuals and
-/// collects their statistics, for different shapes of the individuals' fitness scores.
+/// collects their statistics, for different shapes of the individuals' scores.
 pub fn benchmark_population<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     population_size: usize,
 ) {
     let distinct = shuffled_individuals(population_size);
-    let equal_fitness = (0..population_size)
-        .map(|id| Scored { id, fitness: 1.0 })
+    let equal_score = (0..population_size)
+        .map(|id| Scored { id, score: 1.0 })
         .collect::<Vec<_>>();
     let duplicates = (0..population_size)
         .map(|i| Scored {
             id: i % 10,
-            fitness: (i % 10) as f64,
+            score: (i % 10) as f64,
         })
         .collect::<Vec<_>>();
 
     group.throughput(Throughput::Elements(population_size as u64));
 
     for (name, individuals) in [
-        ("Distinct fitness", &distinct),
-        ("Equal fitness", &equal_fitness),
+        ("Distinct score", &distinct),
+        ("Equal score", &equal_score),
         ("Duplicates", &duplicates),
     ] {
         group.bench_function(name, |b| {
@@ -290,16 +290,20 @@ pub fn benchmark_generation_steps<M: Measurement>(
     let individuals = (0..population_size)
         .map(|_| OneMax::new_random(&genome_length, &mut rng))
         .collect::<Vec<_>>();
-    let state = RunState::new(ga.initialize_population(individuals.clone()).unwrap());
+    let state = {
+        let mut individuals = individuals.clone();
+        ga.evaluate_initial(&mut individuals);
+        RunState::new(Population::new(individuals).unwrap())
+    };
     let population = state.population();
     ga.prepare_generation(&state);
 
     group.throughput(Throughput::Elements(population_size as u64));
 
-    group.bench_function("initialize_population", |b| {
-        b.iter_batched(
+    group.bench_function("evaluate_initial", |b| {
+        b.iter_batched_ref(
             || individuals.clone(),
-            |individuals| ga.initialize_population(individuals),
+            |individuals| ga.evaluate_initial(individuals),
             BatchSize::SmallInput,
         );
     });

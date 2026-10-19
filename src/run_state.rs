@@ -51,7 +51,11 @@ impl<I: Individual> RunState<I> {
         replace(&mut self.population)?;
         self.generation += 1;
         let fittest = self.population.fittest();
-        if fittest.fitness() > self.fittest_so_far.fitness() {
+        if self
+            .population
+            .objective()
+            .is_fitter(fittest.score(), self.fittest_so_far.score())
+        {
             self.fittest_so_far = fittest.clone();
             self.stagnation = 0;
         } else {
@@ -74,7 +78,7 @@ impl<I: Individual> RunState<I> {
         self.generation
     }
 
-    /// Returns the number of generations since the fitness of the
+    /// Returns the number of generations since the score of the
     /// [fittest individual so far](RunState::fittest_so_far) last improved.
     #[inline]
     pub fn stagnation(&self) -> usize {
@@ -124,17 +128,17 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct Mock {
         id: u32,
-        fitness: f64,
+        score: f64,
     }
 
     impl Individual for Mock {
-        fn fitness(&self) -> f64 {
-            self.fitness
+        fn score(&self) -> f64 {
+            self.score
         }
     }
 
-    fn mock(id: u32, fitness: f64) -> Mock {
-        Mock { id, fitness }
+    fn mock(id: u32, score: f64) -> Mock {
+        Mock { id, score }
     }
 
     fn state(individuals: Vec<Mock>) -> RunState<Mock> {
@@ -166,7 +170,7 @@ mod tests {
     }
 
     #[test]
-    fn advance_counts_stagnation_from_the_best_fitness_ever_reached() {
+    fn advance_counts_stagnation_from_the_best_score_ever_reached() {
         let mut state = state(vec![mock(1, 2.0)]);
 
         // The fittest individual is lost, and then an equally fit one is found again.
@@ -192,6 +196,18 @@ mod tests {
 
         advance(&mut state, vec![mock(5, 2.5)]);
         assert_eq!(state.into_fittest_so_far().id, 5);
+    }
+
+    #[test]
+    fn improvement_follows_the_objective_of_the_population() {
+        let population = Population::with_objective(vec![mock(1, 10.0)], Objective::Minimize);
+        let mut state = RunState::new(population.unwrap());
+
+        advance(&mut state, vec![mock(2, 15.0)]);
+        assert_eq!((state.stagnation(), state.fittest_so_far().id), (1, 1));
+
+        advance(&mut state, vec![mock(3, -5.0)]);
+        assert_eq!((state.stagnation(), state.fittest_so_far().id), (0, 3));
     }
 
     #[test]

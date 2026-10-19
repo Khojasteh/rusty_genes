@@ -6,8 +6,9 @@ use std::ops::Deref;
 ///
 /// # Note
 /// A population is never empty, and it holds only valid and distinct individuals, sorted by
-/// their fitness score in ascending order. Individuals are distinct according to their
-/// [`PartialEq`] implementation.
+/// their score from worst to best according to its [`objective`](Population::objective).
+/// This is ascending score order for maximization and descending for minimization.
+/// Individuals are distinct according to their [`PartialEq`] implementation.
 ///
 /// A population holds only the individuals of one generation. The history of a run, such as
 /// its generation number and the fittest individual of any generation, is kept by the
@@ -15,19 +16,42 @@ use std::ops::Deref;
 pub struct Population<I: Individual> {
     individuals: Vec<I>,
     stats: PopulatedStats,
+    objective: Objective,
 }
 
 impl<I: Individual> Population<I> {
-    /// Creates a new population from the given individuals.
+    /// Creates a new population that maximizes the given individuals' scores.
     ///
     /// Invalid individuals (see [`Individual::is_valid`]) and duplicates are discarded, and the
-    /// remaining individuals are sorted by their fitness score.
+    /// remaining individuals are sorted by their score.
+    /// Deduplication uses [`PartialEq`] across all scores and takes quadratic time in
+    /// the worst case.
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual is given.
-    pub fn new(mut individuals: Vec<I>) -> Result<Self, EvolutionError> {
-        let stats = normalize(&mut individuals)?;
-        Ok(Self { individuals, stats })
+    pub fn new(individuals: Vec<I>) -> Result<Self, EvolutionError> {
+        Self::with_objective(individuals, Objective::Maximize)
+    }
+
+    /// Creates a population with an explicit optimization direction.
+    ///
+    /// Scores and statistics retain the model's original units. Individuals are sorted from
+    /// worst to best and deduplicated as in [`new`](Self::new). When equal solutions have
+    /// different cached scores, the better evaluation is retained. The objective remains fixed
+    /// when the population is [`replaced`](Self::replace).
+    ///
+    /// # Errors
+    /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual is given.
+    pub fn with_objective(
+        mut individuals: Vec<I>,
+        objective: Objective,
+    ) -> Result<Self, EvolutionError> {
+        let stats = normalize(&mut individuals, objective)?;
+        Ok(Self {
+            individuals,
+            stats,
+            objective,
+        })
     }
 
     /// Replaces the individuals of the population with those of `offspring`.
@@ -39,14 +63,22 @@ impl<I: Individual> Population<I> {
     /// Returns [`EvolutionError::EmptyPopulation`] if `offspring` contains no valid individual.
     /// In that case, the population is left unchanged and `offspring` is left empty.
     pub fn replace(&mut self, offspring: &mut Vec<I>) -> Result<(), EvolutionError> {
-        let stats = normalize(offspring)?;
+        let stats = normalize(offspring, self.objective)?;
         std::mem::swap(&mut self.individuals, offspring);
         self.stats = stats;
         Ok(())
     }
 
-    /// Returns the statistical information regarding the fitness score of the individuals
-    /// in the current population.
+    /// Returns the fixed optimization direction by which the population is ranked.
+    #[inline]
+    pub fn objective(&self) -> Objective {
+        self.objective
+    }
+
+    /// Summarizes the current generation's scores in their original units.
+    ///
+    /// Minimum and maximum mean the numerical extrema, independently of the objective; use
+    /// [`fittest`](Self::fittest) for the best individual under that objective.
     #[inline]
     pub fn stats(&self) -> &PopulatedStats {
         &self.stats
@@ -55,13 +87,13 @@ impl<I: Individual> Population<I> {
     /// Returns the fittest individual in the population.
     #[inline]
     pub fn fittest(&self) -> &I {
-        &self.individuals[self.stats.arg_max()]
+        &self.individuals[self.individuals.len() - 1]
     }
 
     /// Returns the fittest individual in the population while consuming the population.
     #[inline]
     pub fn take_fittest(mut self) -> I {
-        self.individuals.swap_remove(self.stats.arg_max())
+        self.individuals.pop().expect("a population is never empty")
     }
 }
 
@@ -90,40 +122,38 @@ impl<I: Individual> From<Population<I>> for Vec<I> {
     }
 }
 
-/// Removes invalid and duplicate individuals, sorts the rest by fitness, and collects the
-/// statistics of their fitness scores.
-fn normalize<I: Individual>(individuals: &mut Vec<I>) -> Result<PopulatedStats, EvolutionError> {
+/// Removes invalid and duplicate individuals, sorts the rest by score, and collects the
+/// statistics of their scores.
+fn normalize<I: Individual>(
+    individuals: &mut Vec<I>,
+    objective: Objective,
+) -> Result<PopulatedStats, EvolutionError> {
     individuals.retain(Individual::is_valid);
-    // A stable sort keeps individuals with equal fitness in their given order, which keeps runs
+    // A stable sort keeps individuals with equal score in their given order, which keeps runs
     // reproducible.
-    individuals.par_sort_by(compare_fitness);
+    individuals.par_sort_by(|a, b| objective.cmp_fitness(a.score(), b.score()));
     remove_duplicates(individuals);
     individuals
         .iter()
-        .map(Individual::fitness)
+        .map(Individual::score)
         .collect::<Stats>()
         .snapshot()
         .ok_or(EvolutionError::EmptyPopulation)
 }
 
-/// Removes duplicate individuals from a vector that is sorted by fitness.
+/// Removes duplicate individuals from a vector that is sorted by score.
 ///
-/// Equal individuals have equal fitness scores, so only individuals within the same run of
-/// equal fitness scores are compared with each other. The cost is quadratic in the length of
-/// the longest such run.
+/// Scan from best to worst so equal solutions retain their best evaluation. The retained tail
+/// preserves the order of surviving individuals. With only `PartialEq`, the worst case is quadratic.
 fn remove_duplicates<I: Individual>(individuals: &mut Vec<I>) {
-    let mut kept = 0;
-    let mut run_start = 0;
-    for i in 0..individuals.len() {
-        if kept != 0 && compare_fitness(&individuals[kept - 1], &individuals[i]).is_ne() {
-            run_start = kept;
-        }
-        if !individuals[run_start..kept].contains(&individuals[i]) {
-            individuals.swap(kept, i);
-            kept += 1;
+    let mut start = individuals.len();
+    for i in (0..individuals.len()).rev() {
+        if !individuals[start..].contains(&individuals[i]) {
+            start -= 1;
+            individuals.swap(start, i);
         }
     }
-    individuals.truncate(kept);
+    individuals.drain(..start);
 }
 
 #[cfg(test)]
@@ -133,21 +163,21 @@ mod tests {
     #[derive(Debug, Clone, PartialEq)]
     struct Mock {
         id: u32,
-        fitness: f64,
+        score: f64,
     }
 
     impl Individual for Mock {
-        fn fitness(&self) -> f64 {
-            self.fitness
+        fn score(&self) -> f64 {
+            self.score
         }
     }
 
-    fn mock(id: u32, fitness: f64) -> Mock {
-        Mock { id, fitness }
+    fn mock(id: u32, score: f64) -> Mock {
+        Mock { id, score }
     }
 
     #[test]
-    fn new_removes_non_adjacent_duplicates_with_equal_fitness() {
+    fn new_removes_non_adjacent_duplicates_with_equal_score() {
         let individuals = (0..300).map(|i| mock(i % 3, 1.0)).collect();
         let population = Population::new(individuals).unwrap();
 
@@ -157,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn new_keeps_distinct_individuals_with_equal_fitness() {
+    fn new_keeps_distinct_individuals_with_equal_score() {
         let individuals = vec![mock(1, 2.0), mock(2, 2.0), mock(3, 1.0)];
         let population = Population::new(individuals).unwrap();
 
@@ -166,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn new_discards_invalid_individuals_and_sorts_by_fitness() {
+    fn new_discards_invalid_individuals_and_sorts_by_score() {
         let individuals = vec![
             mock(1, 3.0),
             mock(2, f64::NAN),

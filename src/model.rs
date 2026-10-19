@@ -5,7 +5,7 @@ use super::*;
 ///
 /// The model defines the problem-specific parts of an evolutionary algorithm: the individuals,
 /// and the operators that combine (crossover), vary (mutation), refine (local search), and
-/// evaluate (fitness) them. How and when these operators are applied is decided by the algorithm,
+/// evaluate (score) them. How and when these operators are applied is decided by the algorithm,
 /// for example by a [`Reproduction`].
 ///
 /// The model is shared by the threads that breed new individuals in parallel, so it must be
@@ -13,6 +13,16 @@ use super::*;
 pub trait EvolutionModel: Sync {
     /// The type of individual used by the model.
     type Individual: Individual;
+
+    /// Whether lower or higher scores are better for this problem.
+    ///
+    /// The default is [`Objective::Maximize`]. Return [`Objective::Minimize`] to evaluate
+    /// individuals directly in units such as cost, distance, or error, without negating or
+    /// normalizing their scores. [`Evolution`] reads this when forming the initial population;
+    /// the objective stays fixed for that run, including after [`prepare`](Self::prepare).
+    fn objective(&self) -> Objective {
+        Objective::Maximize
+    }
 
     /// Creates an offspring by combining the genetic information of two individuals.
     ///
@@ -40,24 +50,20 @@ pub trait EvolutionModel: Sync {
 
     /// Improves an individual by a local search.
     ///
-    /// # Arguments
-    /// * `individual` - The individual to improve.
-    /// * `rng` - A mutable reference to a random number generator.
-    ///
-    /// # Note
-    /// [`Reproduction`] calls this method on every new offspring before its fitness is evaluated.
-    /// The default implementation performs no operation.
+    /// [`Reproduction`] calls this on every candidate, including copied parents, after any
+    /// mutation. Its score may be stale or invalid at this point; a search that uses scores
+    /// must evaluate its own trial solutions. The default leaves the candidate unchanged.
     fn improve(&self, _individual: &mut Self::Individual, _rng: &mut Rng) {}
 
-    /// Evaluates the fitness of an individual and stores it in the individual, so that
-    /// [`Individual::fitness`] returns it afterwards.
+    /// Computes and caches the score that [`Individual::score`] will return.
     ///
     /// # Arguments
     /// * `individual` - The individual to evaluate.
     ///
     /// # Note
-    /// An individual with a higher fitness score is considered to be a better fit. An individual
-    /// that is not a valid solution should be evaluated in a way that makes
+    /// Store the score in the problem's own units. Whether lower or higher scores are better
+    /// is determined by [`objective`](Self::objective). An individual that is not a valid
+    /// solution should be evaluated in a way that makes
     /// [`Individual::is_valid`] return [`false`].
     fn evaluate(&self, individual: &mut Self::Individual);
 

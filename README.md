@@ -2,8 +2,9 @@
 
 RustyGenes is a Rust library for building and running evolutionary algorithms, with a focus on
 permutation-based problems, where a solution is an ordering of items. You describe your problem
-as a model, and the library evolves a population of candidate solutions towards a higher
-fitness score, breeding each generation in parallel.
+as a model, and the library evolves a population of candidate solutions towards a better
+score, breeding each generation in parallel. Models can maximize rewards or minimize costs
+using scores in their own units.
 
 The library provides building blocks rather than a ready-made solver: you choose the operators
 that suit your problem, and you can replace any step of an algorithm with your own.
@@ -35,12 +36,15 @@ feature.
 ## Quick start
 
 The library includes the OneMax problem, which looks for a string of bits that are all `1`.
+Its score is the number of set bits, so a 100-bit solution has a maximum score of 100.
 This runs the genetic algorithm on it with the default parameters:
 
 ```rust
 use rusty_genes::one_max::*;
 use rusty_genes::*;
 use std::ops::ControlFlow;
+
+const GENOME_LENGTH: usize = 100;
 
 let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())
     .expect("the default parameters are valid")
@@ -50,8 +54,8 @@ let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default
 // Evolve 100-bit strings until one has only '1' bits, or for at most 200 generations.
 let limits = Limits::new().generations(200);
 let outcome = evolution
-    .run(&100, |state| {
-        if state.fittest_so_far().fitness() < 1.0 {
+    .run(&GENOME_LENGTH, |state| {
+        if state.fittest_so_far().score() < GENOME_LENGTH as f64 {
             limits.check(state)
         } else {
             ControlFlow::Break(StopReason::Custom("every bit is set".into()))
@@ -60,7 +64,7 @@ let outcome = evolution
     .expect("random OneMax individuals are valid");
 
 println!("Stopped: {}", outcome.reason());
-println!("Best fitness: {}", outcome.into_fittest_so_far().fitness());
+println!("Best score: {}", outcome.into_fittest_so_far().score());
 ```
 
 `run` creates a random initial population and calls the closure before each generation. The
@@ -74,22 +78,29 @@ system.
 
 ## Defining your own problem
 
-A problem consists of an individual, which holds a candidate solution and its fitness, and a
+A problem consists of an individual, which holds a candidate solution and its score, and a
 model, which creates, combines, varies, and evaluates individuals. This example evolves a
-permutation of the numbers `0..n` towards ascending order:
+permutation of the numbers `0..n` towards ascending order by minimizing the number of misplaced
+items. Its score is a count, without normalization or negation:
 
 ```rust
 use rusty_genes::*;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Arrangement {
     order: Vec<usize>,
-    fitness: f64,
+    score: f64,
+}
+
+impl PartialEq for Arrangement {
+    fn eq(&self, other: &Self) -> bool {
+        self.order == other.order
+    }
 }
 
 impl Individual for Arrangement {
-    fn fitness(&self) -> f64 {
-        self.fitness
+    fn score(&self) -> f64 {
+        self.score
     }
 }
 
@@ -98,7 +109,7 @@ impl RandomIndividual<usize> for Arrangement {
     fn new_random(len: &usize, rng: &mut Rng) -> Self {
         let mut order = (0..*len).collect::<Vec<_>>();
         rng.shuffle(&mut order);
-        Self { order, fitness: 0.0 }
+        Self { order, score: f64::NAN }
     }
 }
 
@@ -107,19 +118,24 @@ struct Sorting;
 impl EvolutionModel for Sorting {
     type Individual = Arrangement;
 
+    fn objective(&self) -> Objective {
+        Objective::Minimize
+    }
+
     fn crossover(&self, a: &Arrangement, b: &Arrangement, rng: &mut Rng) -> Arrangement {
         let order = CrossoverStrategy::PartiallyMapped.crossover(&a.order, &b.order, rng);
-        Arrangement { order, fitness: 0.0 }
+        Arrangement { order, score: f64::NAN }
     }
 
     fn mutate(&self, individual: &mut Arrangement, rng: &mut Rng) {
         MutationStrategy::Swap.mutate(&mut individual.order, rng);
+        individual.score = f64::NAN;
     }
 
-    // The fitness is the share of the numbers that are in their place.
+    // Lower scores mean fewer misplaced numbers.
     fn evaluate(&self, individual: &mut Arrangement) {
-        let in_place = individual.order.iter().enumerate().filter(|(i, n)| i == *n).count();
-        individual.fitness = in_place as f64 / individual.order.len() as f64;
+        let misplaced = individual.order.iter().enumerate().filter(|(i, n)| i != *n).count();
+        individual.score = misplaced as f64;
     }
 }
 
@@ -134,15 +150,29 @@ let solution = evolution
     .expect("random arrangements are valid")
     .into_fittest_so_far();
 
-println!("{:?} has fitness {}", solution.order, solution.fitness());
+println!("{:?} has score {}", solution.order, solution.score());
 ```
 
 Keep these in mind when you define a model:
 
-- The library maximizes fitness. For a minimization problem, give better solutions a higher
-  score, for example by negating the cost.
-- An individual whose fitness is not finite is invalid and never joins the population. Override
+- Models maximize scores by default. Override `EvolutionModel::objective` to return
+  `Objective::Minimize` when lower scores are better. `Individual::score` returns the raw
+  score in either case; any finite `f64` is supported, including negative values. OneMax uses
+  the number of set bits, while the sorting example uses the number of misplaced items.
+- Populations are ordered from worst to best under their objective. `fittest`, `fittest_so_far`,
+  elites, selection, and survival follow that direction. `stats().min()`, `max()`, and `avg()`
+  always describe the numerical scores in their original units.
+- Roulette-wheel and Boltzmann selection derive probabilities internally. For minimization,
+  roulette weights are proportional to `max(0, maximum score) - score`, with uniform selection
+  when all weights are zero. Boltzmann probabilities are proportional to `exp(-score / T)`,
+  where the temperature `T` is expressed in the score's units. Tournament and rank-based
+  selectors use ordering alone.
+- An individual whose score is not finite is invalid and never joins the population. Override
   `Individual::is_valid` to reject other infeasible solutions.
+- Compare genomes for equality independently of cached evaluations. When equal genomes have
+  different scores, deduplication keeps the better evaluation under the population's objective.
+  Use an invalid score until a new or changed genome has been evaluated; the engine evaluates
+  the initial population and every offspring before admitting them.
 - Individuals are bred and evaluated on several threads, so the model must be `Sync`.
 - The model describes the problem only; the algorithm decides how parents are selected and
   which offspring survive.
@@ -173,7 +203,7 @@ let solution = ga
     .expect("random OneMax individuals are valid")
     .into_fittest_so_far();
 
-println!("Best fitness: {}", solution.fitness());
+println!("Best score: {}", solution.score());
 ```
 
 ## Documentation

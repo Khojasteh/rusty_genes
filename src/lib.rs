@@ -3,9 +3,10 @@
 //!
 //! # Overview
 //!
-//! A problem is described by an [`Individual`], which holds a candidate solution and its fitness,
+//! A problem is described by an [`Individual`], which holds a candidate solution and its score,
 //! and an [`EvolutionModel`], which combines, varies, and evaluates individuals. The library
-//! maximizes fitness.
+//! uses scores in the model's own units and maximizes them by default. A model can return
+//! [`Objective::Minimize`] from [`EvolutionModel::objective`] to minimize costs or errors.
 //!
 //! An algorithm, such as [`GeneticAlgorithm`] or [`AdaptiveGeneticAlgorithm`], evolves a
 //! [`Population`] of individuals generation by generation, and an [`Evolution`] runs it. The
@@ -30,14 +31,16 @@
 //! use rusty_genes::*;
 //! use std::ops::ControlFlow;
 //!
+//! const GENOME_LENGTH: usize = 64;
+//!
 //! let mut evolution = GeneticAlgorithm::new(OneMaxEvolutionModel, Default::default())?
 //!     .into_evolution()
 //!     .with_seed(42);
 //!
 //! // Evolve 64-bit strings towards all '1' bits for at most 100 generations.
 //! let limits = Limits::new().generations(100);
-//! let outcome = evolution.run(&64, |state| {
-//!     if state.fittest_so_far().fitness() < 1.0 {
+//! let outcome = evolution.run(&GENOME_LENGTH, |state| {
+//!     if state.fittest_so_far().score() < GENOME_LENGTH as f64 {
 //!         limits.check(state)
 //!     } else {
 //!         ControlFlow::Break(StopReason::Custom("every bit is set".into()))
@@ -61,6 +64,7 @@ mod error;
 mod evolution;
 mod individual;
 mod model;
+mod objective;
 mod operators;
 mod population;
 mod reproduction;
@@ -74,6 +78,7 @@ pub use error::*;
 pub use evolution::*;
 pub use individual::*;
 pub use model::*;
+pub use objective::*;
 pub use operators::*;
 pub use population::*;
 pub use reproduction::*;
@@ -110,13 +115,21 @@ pub mod one_max {
     /// Represents an individual in the OneMax problem.
     ///
     /// The `genome` is a binary string represented as a vector of booleans. Each boolean
-    /// represents a bit, and the fitness of an individual is the ratio of 'true' bits to
-    /// the total number of bits in this binary string.
-    #[derive(Debug, Clone, PartialEq)]
+    /// represents a bit, and the score of an evaluated individual is the number of `true`
+    /// bits, without normalization. An optimal genome of length `n` has a score of `n`.
+    #[derive(Debug, Clone)]
     pub struct OneMax {
         genome: Vec<bool>,
-        fitness: f64,
+        score: f64,
     }
+
+    impl PartialEq for OneMax {
+        fn eq(&self, other: &Self) -> bool {
+            self.genome == other.genome
+        }
+    }
+
+    impl Eq for OneMax {}
 
     impl OneMax {
         /// Returns the binary string of the individual.
@@ -128,21 +141,26 @@ pub mod one_max {
     /// Conversion from a `Vec<bool>` to a `OneMax` individual.
     ///
     /// This allows a binary string to be directly converted into an individual. The individual
-    /// is not evaluated.
+    /// is not evaluated and remains invalid until the model evaluates it.
     impl From<Vec<bool>> for OneMax {
         fn from(genome: Vec<bool>) -> Self {
             Self {
                 genome,
-                fitness: 0.0,
+                score: f64::NAN,
             }
         }
     }
 
     /// Implements the method required by the [`Individual`] trait for the OneMax problem.
     impl Individual for OneMax {
-        /// Returns the fitness of the individual.
-        fn fitness(&self) -> f64 {
-            self.fitness
+        /// Returns the score of the individual.
+        fn score(&self) -> f64 {
+            self.score
+        }
+
+        /// A valid OneMax individual has a non-empty genome and a finite score.
+        fn is_valid(&self) -> bool {
+            !self.genome.is_empty() && self.score.is_finite()
         }
     }
 
@@ -183,17 +201,20 @@ pub mod one_max {
                 .into()
         }
 
-        /// Mutates the individual's genome by using the duplicate mutation strategy.
+        /// Flips one randomly chosen bit, allowing new set bits even in an all-zero genome.
         fn mutate(&self, individual: &mut Self::Individual, rng: &mut Rng) {
-            MutationStrategy::Duplicate.mutate(&mut individual.genome, rng);
+            if !individual.genome.is_empty() {
+                let index = rng.random_range(0..individual.genome.len());
+                individual.genome[index] = !individual.genome[index];
+                individual.score = f64::NAN;
+            }
         }
 
-        /// Evaluates the individual's fitness by calculating the ratio of `true` bits to the total
-        /// number of bits in its genome. An empty genome is invalid, since its fitness is NaN.
+        /// Evaluates the individual's score as the number of `true` bits in its genome.
+        /// Empty genomes remain invalid according to [`Individual::is_valid`].
         fn evaluate(&self, individual: &mut Self::Individual) {
             let one_bits = individual.genome.iter().filter(|&&one| one).count();
-            let total_bits = individual.genome.len();
-            individual.fitness = one_bits as f64 / total_bits as f64;
+            individual.score = one_bits as f64;
         }
     }
 }
