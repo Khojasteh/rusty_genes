@@ -270,7 +270,8 @@ fn shuffled_individuals(size: usize) -> Vec<Scored> {
 }
 
 /// Measures the selection work of one generation: creating the sampler of a population and
-/// selecting as many parents as the population has individuals.
+/// selecting as many pairs of parents as the population has individuals, each pair as
+/// `Reproduction::breed` selects it, with the second parent among the other individuals.
 pub fn benchmark_selection_strategies<M: Measurement>(
     mut group: BenchmarkGroup<'_, M>,
     population_size: usize,
@@ -294,7 +295,8 @@ pub fn benchmark_selection_strategies<M: Measurement>(
             b.iter(|| {
                 let sampler = selector.sampler(&population, 0);
                 for _ in 0..population_size {
-                    black_box(sampler.select(&mut rng));
+                    let (first, _) = sampler.select(&mut rng);
+                    black_box(sampler.select_other(&mut rng, first));
                 }
             });
         });
@@ -485,8 +487,8 @@ pub fn benchmark(c: &mut Criterion) {
     );
     benchmark_mutation_strategies(c.benchmark_group("Mutation (1K genes)"), 1000);
     benchmark_operator_helpers(c.benchmark_group("Operator helpers (1K genes)"), 1000);
-    benchmark_selection_strategies(c.benchmark_group("Selection (100 individuals)"), 100);
-    benchmark_selection_strategies(c.benchmark_group("Selection (1K individuals)"), 1000);
+    benchmark_selection_strategies(c.benchmark_group("Parent selection (100 individuals)"), 100);
+    benchmark_selection_strategies(c.benchmark_group("Parent selection (1K individuals)"), 1000);
     benchmark_population(c.benchmark_group("Population (1K individuals)"), 1000);
     benchmark_generation_steps(
         c.benchmark_group("Generation steps (OneMax 100 bits, 100 individuals)"),

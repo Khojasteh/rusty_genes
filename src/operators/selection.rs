@@ -1,5 +1,5 @@
 use super::*;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 /// Represents various selection strategies for selecting an individual from the population in
 /// an evolutionary algorithm.
@@ -118,36 +118,53 @@ pub trait Sampler<'a, I: Individual>: Sync {
     /// Selects a parent, returning its index and the individual at that index.
     fn select(&self, rng: &mut Rng) -> (usize, &'a I);
 
-    /// Selects an individual of the population other than the one at index `excluded`, by
-    /// selecting at most `max_tries` times.
+    /// Selects an individual of the population other than the one at index `excluded`.
     ///
-    /// # Returns
-    /// The index and a reference of the selected individual, or [`None`] if every selection
-    /// returned the excluded individual.
+    /// Returns its index and reference, or [`None`] for a population of one individual.
     ///
+    /// The other individuals are selected with the probabilities that
+    /// [`select`](Sampler::select) gives them, in proportion, as if selecting until another
+    /// individual is selected. If `select` gives none of them a chance, they are equally likely.
     /// The individuals of a population are distinct, so the selected individual differs from the
-    /// excluded one. The default implementation repeats [`select`](Sampler::select).
+    /// excluded one. For populations of at least two individuals, an out-of-bounds `excluded`
+    /// leaves the selection unrestricted, as in `select`.
+    ///
+    /// Built-in samplers override this method to sample that conditional distribution. The
+    /// default for custom samplers approximates it by trying `select` up to three times, then
+    /// falling back to a uniform choice among the other individuals.
     #[inline]
-    fn select_other(
-        &self,
-        rng: &mut Rng,
-        excluded: usize,
-        max_tries: usize,
-    ) -> Option<(usize, &'a I)> {
-        for _ in 0..max_tries {
+    fn select_other(&self, rng: &mut Rng, excluded: usize) -> Option<(usize, &'a I)> {
+        let population = self.population();
+        if population.len() < 2 {
+            return None;
+        }
+        for _ in 0..SELECT_OTHER_TRIES {
             let (index, individual) = self.select(rng);
             if index != excluded {
                 return Some((index, individual));
             }
         }
-        None
+        let index = uniform_other(population.len(), excluded, rng);
+        Some((index, &population[index]))
     }
 }
+
+/// The number of times that [`Sampler::select_other`] selects by default before it selects
+/// uniformly among the other individuals.
+const SELECT_OTHER_TRIES: usize = 3;
 
 /// Returns a sampler of the indices in `range` of a population, which is never empty.
 #[inline]
 fn uniform_indices(range: std::ops::Range<usize>) -> UniformIndices {
     UniformIndices::new(range).expect("the range of selectable individuals is never empty")
+}
+
+/// Returns an index of `0..len` other than `excluded`, chosen uniformly. `len` must be at least
+/// two.
+#[inline]
+fn uniform_other(len: usize, excluded: usize, rng: &mut Rng) -> usize {
+    let index = rng.random_range(0..len - 1);
+    if index < excluded { index } else { index + 1 }
 }
 
 /// Samples indices with probabilities proportional to non-negative weights.
@@ -193,6 +210,50 @@ impl WeightedIndex {
             rng.random_range(0..len)
         }
     }
+
+    /// Samples an index other than `excluded`, which must be one of at least two indices, with
+    /// probabilities proportional to the weights of the other indices. If none of them has a
+    /// positive weight, every other index is equally likely.
+    fn sample_other(&self, rng: &mut Rng, excluded: usize) -> usize {
+        let cumulative = &self.cumulative_weights;
+        let len = cumulative.len();
+        // The weights of the indices before the excluded one add up to `before`, and those of the
+        // indices after it to `after`.
+        let before = excluded
+            .checked_sub(1)
+            .map_or(0.0, |previous| cumulative[previous]);
+        let end = cumulative[excluded];
+        let total = cumulative[len - 1];
+        let after = total - end;
+        let others = before + after;
+        if !(others > 0.0 && others.is_finite()) {
+            return uniform_other(len, excluded, rng);
+        }
+
+        // The target is found among the weights before the excluded index, or else among those
+        // after it, skipping the weight of the excluded index. When rounding puts the target at
+        // the end of either part, the last index with a positive weight in that part is taken.
+        let target = rng.random_f64() * others;
+        if target < before || after <= 0.0 {
+            let earlier = &cumulative[..excluded];
+            let index = earlier.partition_point(|&c| c <= target);
+            if index < excluded {
+                index
+            } else {
+                earlier.partition_point(|&c| c < before)
+            }
+        } else {
+            let later = &cumulative[excluded + 1..];
+            let target = end + (target - before);
+            let index = later.partition_point(|&c| c <= target);
+            let index = if index < later.len() {
+                index
+            } else {
+                later.partition_point(|&c| c < total)
+            };
+            excluded + 1 + index
+        }
+    }
 }
 
 /// Selects individuals of a population with probabilities proportional to weights.
@@ -225,6 +286,18 @@ impl<'a, I: Individual> Sampler<'a, I> for WeightedSampler<'a, I> {
         let index = self.weights.sample(rng);
         (index, &self.population[index])
     }
+
+    #[inline]
+    fn select_other(&self, rng: &mut Rng, excluded: usize) -> Option<(usize, &'a I)> {
+        if self.population.len() < 2 {
+            return None;
+        }
+        if excluded >= self.population.len() {
+            return Some(self.select(rng));
+        }
+        let index = self.weights.sample_other(rng, excluded);
+        Some((index, &self.population[index]))
+    }
 }
 
 /// Returns the mean position of the group of equal scores that each individual of `population`
@@ -233,13 +306,45 @@ impl<'a, I: Individual> Sampler<'a, I> for WeightedSampler<'a, I> {
 /// Averaging a weight that is linear in the position over each group gives the weight at this
 /// position, so equal scores get equal weights while the total weight stays the same.
 fn tied_positions<I: Individual>(population: &Population<I>) -> impl Iterator<Item = f64> + '_ {
+    score_groups(population).flat_map(|group| {
+        let mean = group.start as f64 + (group.len() - 1) as f64 / 2.0;
+        std::iter::repeat_n(mean, group.len())
+    })
+}
+
+/// Returns the probability of a tournament of `size` candidates selecting each individual of
+/// `population`, in the order of the population.
+///
+/// The winner of a tournament is in the group of equal scores at the positions `start..end` when
+/// every candidate is before `end` but not every one is before `start`, and the individuals of
+/// the group are equally likely to win.
+fn tournament_probabilities<I: Individual>(
+    population: &[I],
+    size: usize,
+) -> impl Iterator<Item = f64> + '_ {
+    let len = population.len() as f64;
+    let all_before = move |position: usize| (position as f64 / len).powf(size as f64);
+    // Each group starts where the group before it ends, so each power is computed once.
+    let mut all_before_start = all_before(0);
+    score_groups(population).flat_map(move |group| {
+        let all_before_end = all_before(group.end);
+        let probability = (all_before_end - all_before_start) / group.len() as f64;
+        all_before_start = all_before_end;
+        std::iter::repeat_n(probability, group.len())
+    })
+}
+
+/// Returns the positions of each group of equal scores of `population`, in its order.
+fn score_groups<I: Individual>(
+    population: &[I],
+) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
     let mut start = 0;
     population
-        .chunk_by(move |a, b| a.score() == b.score())
-        .flat_map(move |group| {
-            let mean = start as f64 + (group.len() - 1) as f64 / 2.0;
-            start += group.len();
-            std::iter::repeat_n(mean, group.len())
+        .chunk_by(|a, b| a.score() == b.score())
+        .map(move |group| {
+            let positions = start..start + group.len();
+            start = positions.end;
+            positions
         })
 }
 
@@ -302,6 +407,8 @@ impl<I: Individual> SelectionMechanism<I> for TournamentSelection {
             population,
             size: self.size,
             indices: uniform_indices(0..population.len()),
+            probabilities: OnceLock::new(),
+            without_fittest: OnceLock::new(),
         })
     }
 }
@@ -311,6 +418,12 @@ struct TournamentSampler<'a, I: Individual> {
     population: &'a Population<I>,
     size: usize,
     indices: UniformIndices,
+    // The probability of each individual winning a tournament, computed when another individual
+    // is first selected.
+    probabilities: OnceLock<WeightedIndex>,
+    // Conditioning on the sole fittest individual not winning keeps the other probabilities
+    // representable even when their unconditional probabilities underflow.
+    without_fittest: OnceLock<WeightedIndex>,
 }
 
 impl<'a, I: Individual> Sampler<'a, I> for TournamentSampler<'a, I> {
@@ -331,6 +444,34 @@ impl<'a, I: Individual> Sampler<'a, I> for TournamentSampler<'a, I> {
             }
         }
         (winner, &population[winner])
+    }
+
+    fn select_other(&self, rng: &mut Rng, excluded: usize) -> Option<(usize, &'a I)> {
+        let population = self.population;
+        if population.len() < 2 {
+            return None;
+        }
+        if excluded >= population.len() {
+            return Some(self.select(rng));
+        }
+        if excluded == population.len() - 1
+            && population[excluded - 1].score() != population[excluded].score()
+        {
+            // The sole fittest individual loses exactly when no draw selects it. Conditional
+            // on that event, each draw is uniform among the remaining individuals.
+            let probabilities = self.without_fittest.get_or_init(|| {
+                WeightedIndex::new(tournament_probabilities(&population[..excluded], self.size))
+            });
+            let index = probabilities.sample(rng);
+            return Some((index, &population[index]));
+        }
+        // Repeating tournaments until another individual wins can take many of them when the
+        // excluded one wins most, so the other individual is drawn by the chances of winning.
+        let probabilities = self
+            .probabilities
+            .get_or_init(|| WeightedIndex::new(tournament_probabilities(population, self.size)));
+        let index = probabilities.sample_other(rng, excluded);
+        Some((index, &population[index]))
     }
 }
 
@@ -647,6 +788,27 @@ impl<'a, I: Individual> Sampler<'a, I> for ElitistSampler<'a, I> {
             index = rng.random_range(self.tied_start..self.tied_end);
         }
         (index, &self.population[index])
+    }
+
+    fn select_other(&self, rng: &mut Rng, excluded: usize) -> Option<(usize, &'a I)> {
+        let len = self.population.len();
+        if len < 2 {
+            return None;
+        }
+        // The individuals from `tied_start` on are selectable. When the excluded one is the only
+        // one, the others are equally likely; otherwise, it is selected at most half of the time,
+        // so selecting until another individual is selected takes at most two selections on
+        // average.
+        if self.tied_start == len - 1 && excluded == len - 1 {
+            let index = uniform_other(len, excluded, rng);
+            return Some((index, &self.population[index]));
+        }
+        loop {
+            let selected = self.select(rng);
+            if selected.0 != excluded {
+                return Some(selected);
+            }
+        }
     }
 }
 

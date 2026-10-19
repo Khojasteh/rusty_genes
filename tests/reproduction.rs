@@ -22,7 +22,7 @@ impl<'a> Sampler<'a, BitGenome> for FixedSampler<'a> {
     fn select(&self, _: &mut Rng) -> (usize, &'a BitGenome) {
         (self.0, &self.1[self.0])
     }
-    fn select_other(&self, _: &mut Rng, _: usize, _: usize) -> Option<(usize, &'a BitGenome)> {
+    fn select_other(&self, _: &mut Rng, _: usize) -> Option<(usize, &'a BitGenome)> {
         let i = 1 - self.0;
         Some((i, &self.1[i]))
     }
@@ -94,6 +94,34 @@ fn breeding_returns_the_candidate_and_its_parents() {
         (candidate.fittest_parent(), candidate.other_parent()),
         (1, Some(0))
     );
+}
+
+#[test]
+fn candidates_have_two_parents_even_when_only_the_fittest_can_be_selected() {
+    // Elitist selection that excludes nine of ten individuals, and roulette-wheel selection in
+    // which every other individual has a score of zero, only select the fittest individual.
+    let only_last = (0..10).map(|i| if i < 9 { 0.0 } else { 1.0 }).collect();
+    for (weights, strategy) in [
+        (
+            (1..=10).map(f64::from).collect(),
+            SelectionStrategy::Elitist(0.9),
+        ),
+        (only_last, SelectionStrategy::RouletteWheel),
+    ] {
+        let model = WeightedBits::new(weights, Objective::Maximize);
+        let population = one_hot_population(&model, 10);
+        let reproduction = Reproduction::from_strategy(strategy, 1.0, 0.0).unwrap();
+        let parents = reproduction.selector().sampler(&population, 0);
+        let mut rng = Rng::from_seed(0);
+        for _ in 0..100 {
+            let candidate = reproduction.breed(&model, &*parents, &mut rng);
+            assert_eq!(candidate.fittest_parent(), 9, "{strategy:?}");
+            assert!(
+                candidate.other_parent().is_some_and(|other| other != 9),
+                "{strategy:?}"
+            );
+        }
+    }
 }
 
 /// Sets a survival policy of a reproduction.

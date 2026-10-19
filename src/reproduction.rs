@@ -1,18 +1,16 @@
 use super::*;
 use rayon::prelude::*;
 
-/// The number of attempts to select a second parent distinct from the first one.
-const DISTINCT_PARENT_TRIES: usize = 3;
-
 /// Breeds the next generation of a population: it selects parents, combines and varies them with
 /// the operators of an [`EvolutionModel`] into candidates, and lets a [`SurvivalPolicy`] choose
 /// the next generation from the population and the candidates.
 ///
 /// # Note
 /// Each candidate is bred as follows:
-/// 1. A parent is selected and, with the probability of the crossover rate, a second distinct
-///    parent is selected to cross over with. Without a second parent, the candidate is a copy of
-///    the first one.
+/// 1. A parent is selected and, with the probability of the crossover rate, a second parent is
+///    selected among the other individuals by [`Sampler::select_other`] to cross over with.
+///    Otherwise, and in a population of a single individual, the candidate is a copy of the
+///    first parent.
 /// 2. With the probability of the mutation rate, the candidate is mutated.
 /// 3. The candidate is improved and evaluated.
 ///
@@ -29,7 +27,8 @@ impl<I: Individual> Reproduction<I> {
     ///
     /// # Arguments
     /// * `selector` - The mechanism that selects parents.
-    /// * `crossover_rate` - The probability of a candidate having two parents.
+    /// * `crossover_rate` - The probability of a candidate having two parents, in a population
+    ///   of more than one individual.
     /// * `mutation_rate` - The probability of a candidate being mutated.
     ///
     /// # Errors
@@ -86,7 +85,8 @@ impl<I: Individual> Reproduction<I> {
         self.survival = Box::new(survival);
     }
 
-    /// Returns the probability of a candidate having two parents.
+    /// Returns the probability of a candidate having two parents, in a population of more than
+    /// one individual.
     #[inline]
     pub fn crossover_rate(&self) -> f64 {
         self.crossover_rate
@@ -143,7 +143,7 @@ impl<I: Individual> Reproduction<I> {
         let population = parents.population();
         let (first, parent1) = parents.select(rng);
         let second = if population.len() > 1 && rng.random_bool(self.crossover_rate) {
-            parents.select_other(rng, first, DISTINCT_PARENT_TRIES)
+            parents.select_other(rng, first)
         } else {
             None
         };

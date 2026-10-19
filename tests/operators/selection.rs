@@ -421,19 +421,177 @@ fn samplers_select_another_individual_by_index() {
     let single = create_population(|_| 1.0);
     assert_eq!(single.len(), 1);
     let rank = RankSelection::new();
-    assert!(
-        rank.sampler(&single, 0)
-            .select_other(&mut rng, 0, 3)
-            .is_none()
-    );
+    assert!(rank.sampler(&single, 0).select_other(&mut rng, 0).is_none());
 
     let population = create_test_population();
     let tournament = TournamentSelection::new(4).unwrap();
     let sampler = tournament.sampler(&population, 0);
     let fittest = population.len() - 1;
     for _ in 0..1000 {
-        let (index, individual) = sampler.select_other(&mut rng, fittest, 100).unwrap();
+        let (index, individual) = sampler.select_other(&mut rng, fittest).unwrap();
         assert_ne!(index, fittest);
         assert_eq!(individual, &population[index]);
     }
+}
+
+/// Returns how often `sampler` selects each individual other than the one at `excluded`.
+fn observed_other_probabilities(sampler: &dyn Sampler<'_, BitGenome>, excluded: usize) -> Vec<f64> {
+    let mut rng = Rng::from_seed(0);
+    let mut counts = vec![0; sampler.population().len()];
+    for _ in 0..ITERATIONS {
+        counts[sampler.select_other(&mut rng, excluded).unwrap().0] += 1;
+    }
+    counts
+        .into_iter()
+        .map(|count| count as f64 / ITERATIONS as f64)
+        .collect()
+}
+
+#[test]
+fn every_selector_selects_another_individual_as_if_selecting_until_it_does() {
+    // The probabilities of selecting each individual, as in the test of equal chances.
+    let population = weighted_population(&[0.0, 10.0, 10.0, 20.0], Objective::Maximize);
+    let boltzmann_sum = (-2.0_f64).exp() + 2.0 * (-1.0_f64).exp() + 1.0;
+    let strategies = [
+        (
+            SelectionStrategy::Tournament(2),
+            [1.0 / 16.0, 4.0 / 16.0, 4.0 / 16.0, 7.0 / 16.0],
+        ),
+        (SelectionStrategy::Rank, [0.1, 0.25, 0.25, 0.4]),
+        (SelectionStrategy::Linear(2.0), [0.0, 0.25, 0.25, 0.5]),
+        (SelectionStrategy::Elitist(0.5), [0.0, 0.25, 0.25, 0.5]),
+        (SelectionStrategy::RouletteWheel, [0.0, 0.25, 0.25, 0.5]),
+        (
+            SelectionStrategy::Boltzmann(10.0, 1.0),
+            [
+                (-2.0_f64).exp() / boltzmann_sum,
+                (-1.0_f64).exp() / boltzmann_sum,
+                (-1.0_f64).exp() / boltzmann_sum,
+                1.0 / boltzmann_sum,
+            ],
+        ),
+    ];
+    for (strategy, selected) in strategies {
+        let selector = strategy.create_selector::<BitGenome>().unwrap();
+        let sampler = selector.sampler(&population, 0);
+        // Excluding the fittest individual, or one of two with equal scores, leaves the others
+        // their chances in proportion.
+        for excluded in [3, 1] {
+            let observed = observed_other_probabilities(&*sampler, excluded);
+            let others = 1.0 - selected[excluded];
+            for (index, &observed) in observed.iter().enumerate() {
+                let expected = if index == excluded {
+                    0.0
+                } else {
+                    selected[index] / others
+                };
+                assert!(
+                    (observed - expected).abs() < CONFIDENCE,
+                    "{strategy:?} without {excluded}: {observed:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn others_are_equally_likely_when_a_selector_selects_only_the_excluded_individual() {
+    // Elitist selection of the fittest quarter, and roulette-wheel selection of the only
+    // individual with a positive score.
+    for (scores, strategy) in [
+        ([0.0, 10.0, 20.0, 30.0], SelectionStrategy::Elitist(0.75)),
+        ([0.0, 0.0, 0.0, 30.0], SelectionStrategy::RouletteWheel),
+    ] {
+        let population = weighted_population(&scores, Objective::Maximize);
+        let selector = strategy.create_selector::<BitGenome>().unwrap();
+        let sampler = selector.sampler(&population, 0);
+        let observed = observed_other_probabilities(&*sampler, 3);
+        assert_probabilities(&observed, |index| if index == 3 { 0.0 } else { 1.0 / 3.0 });
+    }
+}
+
+#[test]
+fn large_tournaments_preserve_conditional_selection_probabilities() {
+    for (objective, sign) in [(Objective::Maximize, 1.0), (Objective::Minimize, -1.0)] {
+        for (scores, expected) in [
+            (vec![0.0, 1.0, 2.0], vec![0.0, 1.0, 0.0]),
+            (vec![0.0, 1.0, 1.0, 2.0], vec![0.0, 0.5, 0.5, 0.0]),
+            (vec![0.0, 2.0, 2.0], vec![0.0, 1.0, 0.0]),
+        ] {
+            let scores = scores
+                .into_iter()
+                .map(|score| sign * score)
+                .collect::<Vec<_>>();
+            let population = weighted_population(&scores, objective);
+            let selector = TournamentSelection::new(4096).unwrap();
+            let sampler = selector.sampler(&population, 0);
+            let excluded = population.len() - 1;
+            let mut rng = Rng::from_seed(0);
+            let mut counts = vec![0; population.len()];
+            for _ in 0..1000 {
+                counts[sampler.select_other(&mut rng, excluded).unwrap().0] += 1;
+            }
+            for (count, expected) in counts.into_iter().zip(expected) {
+                let observed = count as f64 / 1000.0;
+                // The runners-up beat the worst with probability indistinguishable from 1;
+                // tied runners-up split it, with sampling STD at most 0.016.
+                assert!(
+                    (observed - expected).abs() < 0.08,
+                    "{objective:?}: {scores:?}: {observed}"
+                );
+                if expected == 0.0 {
+                    assert_eq!(count, 0);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn custom_samplers_select_another_individual_by_default() {
+    /// Selects the fittest individual three times in four.
+    struct MostlyFittest<'a>(&'a Population<MockIndividual>);
+    impl<'a> Sampler<'a, MockIndividual> for MostlyFittest<'a> {
+        fn population(&self) -> &'a Population<MockIndividual> {
+            self.0
+        }
+        fn select(&self, rng: &mut Rng) -> (usize, &'a MockIndividual) {
+            let index = if rng.random_bool(0.75) {
+                self.0.len() - 1
+            } else {
+                0
+            };
+            (index, &self.0[index])
+        }
+    }
+
+    let population = create_test_population();
+    let fittest = population.len() - 1;
+    let sampler = MostlyFittest(&population);
+    let mut rng = Rng::from_seed(0);
+    let mut counts = vec![0; population.len()];
+    for _ in 0..ITERATIONS {
+        counts[sampler.select_other(&mut rng, fittest).unwrap().0] += 1;
+    }
+    // Three selections of the fittest individual, which happen with a chance of 27 in 64, are
+    // followed by a uniform selection among the others.
+    let uniform = 27.0 / 64.0 / fittest as f64;
+    let observed = counts
+        .into_iter()
+        .map(|count| count as f64 / ITERATIONS as f64)
+        .collect::<Vec<_>>();
+    assert_probabilities(&observed, |index| {
+        if index == 0 {
+            1.0 - 27.0 / 64.0 + uniform
+        } else if index == fittest {
+            0.0
+        } else {
+            uniform
+        }
+    });
+    assert!(
+        MostlyFittest(&create_population(|_| 1.0))
+            .select_other(&mut rng, 0)
+            .is_none()
+    );
 }
