@@ -1,0 +1,360 @@
+use crate::support::*;
+use rusty_genes::*;
+use std::hash::{Hash, Hasher};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MockIndividual {
+    score: f64,
+}
+
+impl Hash for MockIndividual {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f64(self.score, state);
+    }
+}
+
+impl Individual for MockIndividual {
+    fn score(&self) -> f64 {
+        self.score
+    }
+}
+
+const POPULATION_SIZE: usize = 10;
+const ITERATIONS: usize = 100000;
+const CONFIDENCE: f64 = 0.01;
+
+fn create_population(score: impl Fn(usize) -> f64) -> Population<MockIndividual> {
+    (0..POPULATION_SIZE)
+        .map(|i| MockIndividual { score: score(i) })
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap()
+}
+
+fn create_test_population() -> Population<MockIndividual> {
+    create_population(|i| i as f64 / POPULATION_SIZE as f64)
+}
+
+fn observed_probabilities<S>(strategy: &mut S, population: &Population<MockIndividual>) -> Vec<f64>
+where
+    S: SelectionMechanism<MockIndividual>,
+{
+    let mut rng = Rng::from_seed(0);
+    let mut counts = vec![0; population.len()];
+
+    strategy.prepare(population);
+    for _ in 0..ITERATIONS {
+        let (index, _) = strategy.select(population, &mut rng);
+        counts[index] += 1;
+    }
+    counts
+        .into_iter()
+        .map(|count| count as f64 / ITERATIONS as f64)
+        .collect()
+}
+
+fn assert_probabilities(observed: &[f64], expected: impl Fn(usize) -> f64) {
+    for (index, &observed) in observed.iter().enumerate() {
+        let expected = expected(index);
+        assert!(
+            (observed - expected).abs() < CONFIDENCE,
+            "index {index}: observed {observed}, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn tournament_selection_probabilities() {
+    let mut tournament = TournamentSelection::new(2).unwrap();
+    let population = create_test_population();
+    let observed = observed_probabilities(&mut tournament, &population);
+
+    let n = population.len() as f64;
+    let size = tournament.size() as i32;
+    assert_probabilities(&observed, |index| {
+        (1.0 - (index as f64 / n).powi(size)) - (1.0 - ((index as f64 + 1.0) / n).powi(size))
+    });
+}
+
+#[test]
+fn roulette_wheel_selection_probabilities() {
+    let mut roulette_wheel = RouletteWheelSelection::new();
+    let population = create_test_population();
+    let observed = observed_probabilities(&mut roulette_wheel, &population);
+
+    let total_score = population.iter().map(|i| i.score).sum::<f64>();
+    assert_probabilities(&observed, |index| population[index].score / total_score);
+}
+
+#[test]
+fn roulette_wheel_selection_with_negative_score() {
+    let mut roulette_wheel = RouletteWheelSelection::new();
+    let population = create_population(|i| i as f64 - 20.0);
+    let observed = observed_probabilities(&mut roulette_wheel, &population);
+
+    // The scores are shifted by the lowest one, -20.
+    let total_shifted = (0..POPULATION_SIZE).sum::<usize>() as f64;
+    assert_probabilities(&observed, |index| index as f64 / total_shifted);
+}
+
+#[test]
+fn roulette_wheel_selection_with_zero_score() {
+    let mut roulette_wheel = RouletteWheelSelection::new();
+    let population: Population<MockIndividual> =
+        vec![MockIndividual { score: 0.0 }].try_into().unwrap();
+    let observed = observed_probabilities(&mut roulette_wheel, &population);
+
+    assert_probabilities(&observed, |_| 1.0);
+}
+
+#[test]
+fn roulette_preserves_probabilities_at_large_score_scales() {
+    for (scores, expected) in [
+        (vec![-1e308, 0.0, 1e308], vec![0.0, 1.0 / 3.0, 2.0 / 3.0]),
+        (vec![8e307, 1.6e308], vec![1.0 / 3.0, 2.0 / 3.0]),
+        (vec![0.0, 1e-308, 2e-308], vec![0.0, 1.0 / 3.0, 2.0 / 3.0]),
+    ] {
+        let population = Population::new(
+            scores
+                .into_iter()
+                .map(|score| MockIndividual { score })
+                .collect(),
+        )
+        .unwrap();
+        let observed = observed_probabilities(&mut RouletteWheelSelection::new(), &population);
+        assert_probabilities(&observed, |index| expected[index]);
+    }
+}
+
+#[test]
+fn rank_selection_probabilities() {
+    let mut rank = RankSelection::new();
+    let population = create_test_population();
+    let observed = observed_probabilities(&mut rank, &population);
+
+    let total_ranks = (population.len() * (population.len() + 1) / 2) as f64;
+    assert_probabilities(&observed, |index| (index + 1) as f64 / total_ranks);
+}
+
+#[test]
+fn elitist_selection_probabilities() {
+    let mut elitist = ElitistSelection::new(0.7).unwrap();
+    let population = create_test_population();
+    let observed = observed_probabilities(&mut elitist, &population);
+
+    let selection_bound = (population.len() as f64 * elitist.ratio()).floor() as usize;
+    assert_probabilities(&observed, |index| {
+        if index >= selection_bound {
+            1.0 / (population.len() - selection_bound) as f64
+        } else {
+            0.0
+        }
+    });
+}
+
+#[test]
+fn boltzmann_selection_probabilities() {
+    // We keep the temperature constant for this test (cooling_rate = 1.0)
+    let mut boltzmann = BoltzmannSelection::new(5.0, 1.0).unwrap();
+    let population = create_test_population();
+    let observed = observed_probabilities(&mut boltzmann, &population);
+
+    let scaled = |index: usize| (population[index].score / 5.0).exp();
+    let total_scaled = (0..population.len()).map(scaled).sum::<f64>();
+    assert_probabilities(&observed, |index| scaled(index) / total_scaled);
+}
+
+#[test]
+fn boltzmann_selection_favors_fittest_after_cooling() {
+    let mut boltzmann = BoltzmannSelection::new(5.0, 0.9).unwrap();
+    let population = create_test_population();
+    for _ in 0..100 {
+        SelectionMechanism::<MockIndividual>::prepare(&mut boltzmann, &population);
+    }
+    let observed = observed_probabilities(&mut boltzmann, &population);
+
+    // After 100 coolings, the temperature is about 1.3e-4, and the fittest individual is
+    // the only one with a non-negligible weight.
+    assert_probabilities(&observed, |index| {
+        if index == population.len() - 1 {
+            1.0
+        } else {
+            0.0
+        }
+    });
+}
+
+#[test]
+fn boltzmann_selection_reset_restores_the_initial_temperature() {
+    let mut boltzmann = BoltzmannSelection::new(5.0, 0.5).unwrap();
+    let population = create_test_population();
+    SelectionMechanism::<MockIndividual>::prepare(&mut boltzmann, &population);
+    assert_eq!(boltzmann.temperature(), 2.5);
+
+    SelectionMechanism::<MockIndividual>::reset(&mut boltzmann);
+    assert_eq!(boltzmann.temperature(), 5.0);
+}
+
+#[test]
+fn linear_selection_probabilities() {
+    let n = POPULATION_SIZE as f64;
+    for pressure in [1.0, 1.25, 1.5, 2.0] {
+        let mut linear = LinearSelection::new(pressure).unwrap();
+        let population = create_test_population();
+        let observed = observed_probabilities(&mut linear, &population);
+
+        assert_probabilities(&observed, |index| {
+            ((2.0 - pressure) + 2.0 * (pressure - 1.0) * index as f64 / (n - 1.0)) / n
+        });
+    }
+}
+
+#[test]
+fn selection_parameters_are_validated() {
+    assert!(TournamentSelection::new(0).is_err());
+    assert!(BoltzmannSelection::new(0.0, 0.9).is_err());
+    assert!(BoltzmannSelection::new(1.0, f64::INFINITY).is_err());
+    assert!(LinearSelection::new(0.9).is_err());
+    assert!(LinearSelection::new(2.1).is_err());
+    assert!(ElitistSelection::new(1.0).is_err());
+    assert!(SelectionStrategy::Linear(f64::NAN).validate().is_err());
+    assert!(SelectionStrategy::Rank.validate().is_ok());
+}
+
+#[test]
+fn roulette_preserves_adjacent_score_differences() {
+    let center = 1.5_f64;
+    let scores = [
+        -center,
+        -f64::from_bits(center.to_bits() - 1),
+        -f64::from_bits(center.to_bits() - 2),
+    ];
+    let population = Population::new(
+        scores
+            .into_iter()
+            .map(|score| MockIndividual { score })
+            .collect(),
+    )
+    .unwrap();
+    let observed = observed_probabilities(&mut RouletteWheelSelection::new(), &population);
+    assert_probabilities(&observed, |index| index as f64 / 3.0);
+}
+
+#[test]
+fn boltzmann_scales_overflowing_differences_before_exponentiation() {
+    let population = Population::new(vec![
+        MockIndividual { score: -1e308 },
+        MockIndividual { score: 1e308 },
+    ])
+    .unwrap();
+    let observed = observed_probabilities(
+        &mut BoltzmannSelection::new(1e308, 1.0).unwrap(),
+        &population,
+    );
+    let lower = (-2.0_f64).exp();
+    assert_probabilities(&observed, |index| {
+        if index == 0 {
+            lower / (1.0 + lower)
+        } else {
+            1.0 / (1.0 + lower)
+        }
+    });
+}
+
+#[test]
+fn boltzmann_preserves_probabilities_in_subnormal_score_units() {
+    let unit = f64::from_bits(1);
+    let population = Population::new(
+        [0.0, unit, 2.0 * unit]
+            .into_iter()
+            .map(|score| MockIndividual { score })
+            .collect(),
+    )
+    .unwrap();
+    let mut boltzmann = BoltzmannSelection::new(unit, 0.5).unwrap();
+    for _ in 0..2 {
+        let observed = observed_probabilities(&mut boltzmann, &population);
+        let total = (-2.0_f64).exp() + (-1.0_f64).exp() + 1.0;
+        assert_probabilities(&observed, |index| ((index as f64) - 2.0).exp() / total);
+        assert_eq!(boltzmann.temperature(), unit);
+    }
+}
+
+fn candidate(model: &WeightedBits, index: usize) -> BitGenome {
+    let genes = (0..model.weights.len())
+        .map(|i| i == index)
+        .collect::<Vec<_>>();
+    model.individual(&genes)
+}
+
+fn weighted_population(scores: &[f64], objective: Objective) -> Population<BitGenome> {
+    let model = WeightedBits::new(scores.to_vec(), objective);
+    Population::with_objective(
+        (0..scores.len()).map(|i| candidate(&model, i)).collect(),
+        objective,
+    )
+    .unwrap()
+}
+
+#[test]
+fn every_selector_uses_minimization_order() {
+    let population = weighted_population(&[0.0, 10.0, 20.0], Objective::Minimize);
+    let boltzmann_sum = (-2.0_f64).exp() + (-1.0_f64).exp() + 1.0;
+    let strategies = [
+        (
+            SelectionStrategy::Tournament(2),
+            [1.0 / 9.0, 3.0 / 9.0, 5.0 / 9.0],
+        ),
+        (SelectionStrategy::Rank, [1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0]),
+        (SelectionStrategy::Linear(2.0), [0.0, 1.0 / 3.0, 2.0 / 3.0]),
+        (SelectionStrategy::Elitist(0.5), [0.0, 0.5, 0.5]),
+        (
+            SelectionStrategy::RouletteWheel,
+            [0.0, 1.0 / 3.0, 2.0 / 3.0],
+        ),
+        (
+            SelectionStrategy::Boltzmann(10.0, 1.0),
+            [
+                (-2.0_f64).exp() / boltzmann_sum,
+                (-1.0_f64).exp() / boltzmann_sum,
+                1.0 / boltzmann_sum,
+            ],
+        ),
+    ];
+    for (strategy, expected) in strategies {
+        let mut selector = strategy.create_selector::<BitGenome>().unwrap();
+        selector.prepare(&population);
+        let mut rng = Rng::from_seed(0);
+        let mut counts = [0; 3];
+        for _ in 0..100_000 {
+            counts[selector.select(&population, &mut rng).0] += 1;
+        }
+        for (index, count) in counts.into_iter().enumerate() {
+            assert!(
+                (count as f64 / 100_000.0 - expected[index]).abs() < 0.01,
+                "{strategy:?}: {counts:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn minimizing_roulette_handles_negative_and_extreme_native_scores() {
+    for (scores, expected) in [
+        ([-30.0, -20.0, -10.0], [1.0 / 6.0, 2.0 / 6.0, 3.0 / 6.0]),
+        ([-1e308, 0.0, 1e308], [0.0, 1.0 / 3.0, 2.0 / 3.0]),
+    ] {
+        let population = weighted_population(&scores, Objective::Minimize);
+        let mut selector = RouletteWheelSelection::new();
+        selector.prepare(&population);
+        let mut rng = Rng::from_seed(0);
+        let mut counts = [0; 3];
+        for _ in 0..100_000 {
+            counts[selector.select(&population, &mut rng).0] += 1;
+        }
+        for (count, expected) in counts.into_iter().zip(expected) {
+            assert!((count as f64 / 100_000.0 - expected).abs() < 0.01);
+        }
+        assert_eq!(population.fittest().score(), scores[0]);
+    }
+}
