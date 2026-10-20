@@ -1,8 +1,19 @@
 // OneMax: learning a genetic algorithm by evolving a string of bits towards all ones.
 //
-// It is a simple problem often used to try out evolutionary algorithms. The individual holds a
-// genome of bits and its score, which is the number of set bits, and the model combines, varies,
-// and evaluates individuals. Run it with:
+// A candidate solution is an individual, and its bit string is its genome. The score counts
+// the ones: higher is better, and a string of n bits has the known optimum n. A population is a
+// collection of these candidates that the algorithm replaces generation by generation.
+//
+// The individual defines how to create a random bit string; the model defines how to combine,
+// change, and score bit strings. The standard genetic algorithm chooses parents by tournaments
+// of three: draw three candidates and take the best.
+// Crossover joins parts of two parents; mutation flips a bit, so it can introduce ones that
+// neither parent has. Their probabilities stay fixed during the run.
+//
+// Evolution starts with random bit strings, evaluates them, and breeds new generations. The
+// model supplies the optimum as a goal; a generation limit, and an optional time limit, also
+// stop unsuccessful searches.
+// The returned solution is the best found across all generations. Run it with:
 //
 //     cargo run --example one_max
 //
