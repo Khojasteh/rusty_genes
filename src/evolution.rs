@@ -2,12 +2,15 @@ use super::*;
 use rayon::prelude::*;
 use std::{ops::ControlFlow, time::Instant};
 
-/// The `Evolution` struct is the primary user-facing interface for running an evolutionary
-/// algorithm.
+/// Runs an algorithm from its initial population until a goal or progress callback stops it.
 ///
 /// It owns an implementation of the [`EvolutionAlgorithm`] trait and runs it generation by
 /// generation, starting from a random initial population, from a single individual, or from
 /// a given initial population.
+///
+/// Every run keeps its population and history in a [`RunState`], which its progress callback
+/// observes before each generation is bred, and returns it in an [`Outcome`] with the
+/// [`StopReason`] of the run.
 ///
 /// # Reproducibility
 /// Without a seed, every run is seeded from the operating system. With a seed, set by
@@ -19,9 +22,6 @@ use std::{ops::ControlFlow, time::Instant};
 /// [`EvolutionModel::start_run`], which every run calls before it creates its starting
 /// individuals, and the progress callback does not stop the run by its
 /// [elapsed time](RunState::elapsed).
-///
-/// # Type parameters
-/// * `A` - The evolutionary algorithm to run.
 ///
 /// # Example
 /// Runs the genetic algorithm on the model of the [OneMax example].
@@ -94,17 +94,11 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
         self.algorithm
     }
 
-    /// Runs the evolutionary algorithm with a random initial population.
+    /// Evolves a random starting population until the goal or `progress` stops the run.
     ///
-    /// # Arguments
-    /// * `args` - A reference to the domain-specific arguments for generating the random
-    ///   individuals by [`RandomIndividual::new_random`].
-    /// * `progress` - A closure that is called before each generation is bred. It receives the
-    ///   [`RunState`] of the run, which provides the current population, the generation number,
-    ///   the number of generations without improvement (stagnation), the fittest individual of
-    ///   any generation, and the time the run has taken. The closure returns
-    ///   [`ControlFlow::Continue`] to continue, or [`ControlFlow::Break`] with the reason to
-    ///   stop, for example by checking [`Limits`].
+    /// `args` is passed to [`RandomIndividual::new_random`] for each starting individual, such
+    /// as a genome length or search bounds. The algorithm evaluates these individuals before
+    /// generation zero is formed.
     ///
     /// The model's [`goal_score`](EvolutionModel::goal_score) is read once after the initial
     /// population has been evaluated. If present, the run stops with
@@ -112,9 +106,13 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     /// maximization or at most that goal for minimization, without calling `progress` for the
     /// generation that reaches it.
     ///
-    /// # Returns
-    /// The [`Outcome`] of the run, which holds its final state, including the fittest
-    /// individual of any generation, and the reason it stopped.
+    /// Otherwise, `progress` observes the state of the run with the initial population and
+    /// every later one, before another generation is bred. It returns
+    /// [`ControlFlow::Continue`] to continue, or [`ControlFlow::Break`] with the reason to stop,
+    /// for example by checking [`Limits`].
+    ///
+    /// The [`Outcome`] holds the final state of the run, including the fittest individual of
+    /// any generation, and the reason it stopped.
     ///
     /// # Errors
     /// Returns [`EvolutionError::EmptyPopulation`] if no valid individual could be generated, or
@@ -140,8 +138,8 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
         self.evolve(starting_individuals, progress)
     }
 
-    /// Runs the evolutionary algorithm with an initial population made of `individual` and its
-    /// mutated copies.
+    /// Starts from a known solution and its mutated copies, until the goal or `progress` stops
+    /// the run.
     ///
     /// The original is retained in the initial set. Copies are varied by
     /// [`EvolutionModel::mutate`], and the algorithm evaluates every starting individual,
@@ -152,10 +150,6 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
     /// Returns [`EvolutionError::EmptyPopulation`] if the initial population has no valid
     /// individual, or if a generation ends up with no valid individual.
     /// Returns [`EvolutionError::InvalidParameter`] if the model's goal score is not finite.
-    ///
-    /// # Note
-    /// This method is intended to be used when a good individual has already been found, so its
-    /// genetic information is likely to be valuable in generating high-quality offspring.
     pub fn evolve_individual<F>(
         &mut self,
         individual: IndividualOf<A>,
@@ -180,7 +174,7 @@ impl<A: EvolutionAlgorithm> Evolution<A> {
         self.evolve(starting_individuals, progress)
     }
 
-    /// Runs the evolutionary algorithm on a given initial population.
+    /// Evolves caller-supplied individuals until the goal or `progress` stops the run.
     ///
     /// The algorithm evaluates the starting individuals, so cached scores are not required.
     /// `progress`, goal stopping, and the outcome work as in [`run`](Self::run).

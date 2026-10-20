@@ -1,57 +1,31 @@
 use super::*;
 
-/// Represents various mutation strategies for modifying an individual's genetic material.
+/// In-place variation of a genome without changing its length.
 ///
-/// In genetic algorithms, mutation is used to prevent the population from stagnating at a local
-/// minima or maxima and introduces novel gene sequences that could potentially lead to better
-/// solutions. By introducing small, random tweaks to the genetic material, mutation can help
-/// explore new areas of the solution space that may not have been reachable via crossover alone.
-///
-/// Depending on the nature of the specific problem and the algorithm used, different mutation
-/// strategies can be more effective. Therefore, it is often beneficial to have several mutation
-/// strategies available.
+/// All strategies except [`Duplicate`](Self::Duplicate) preserve the number of copies of each
+/// gene, so they can vary permutations without dropping or repeating an item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MutationStrategy {
-    /// Swap Mutation exchanges the positions of two randomly chosen elements in the genetic material.
-    /// This mutation operator is effective at making small changes in the solution structure,
-    /// allowing for local search and fine-tuning of the solution.
+    /// Exchanges two distinct, randomly chosen positions.
     Swap,
 
-    /// Scramble Mutation picks a random subset of elements in the genetic material and shuffles their
-    /// positions within the selected subset. This mutation operator is useful for introducing
-    /// larger-scale changes in the solution, promoting exploration and diversity in the population.
+    /// Shuffles a contiguous range of at least two genes; the order can remain unchanged.
     Scramble,
 
-    /// Inversion Mutation selects a random subset of elements in the genetic material and reverses their
-    /// order within the chosen subset. This mutation operator can introduce both small and
-    /// large changes in the solution, balancing exploration and exploitation in the search process.
+    /// Reverses a contiguous range of at least two genes.
     Inversion,
 
-    /// Insertion Mutation selects a gene randomly from the genome and moves it to another position.
-    /// This mutation operator can introduce a small local rearrangement of genes, and is particularly
-    /// useful in permutation-based problems where the ordering of genes is important.
+    /// Moves a randomly chosen gene to a distinct position, shifting the intervening genes.
     Insertion,
 
-    /// Duplicate Mutation selects a gene randomly from the genome and copies its value to another
-    /// position, replacing the gene that was previously there. This mutation operator can introduce
-    /// variation into the genome, and can be useful in problems where duplications of certain genes
-    /// may lead to a better solution. Note that this mutation is not applicable to permutation-based
-    /// problems where each gene should be unique.
+    /// Copies one position's value over another, potentially changing gene counts.
+    /// This does not preserve a permutation.
     Duplicate,
 }
 
 impl MutationStrategy {
-    /// Performs a mutation operation on an individual's gene sequence according to the chosen strategy.
-    ///
-    /// # Arguments
-    /// * `genome` - The sequence of genes to be mutated. This could represent a solution
-    ///   in the problem space.
-    /// * `rng` - A random number generator for use in stochastic processes.
-    ///
-    /// # Note
-    /// The mutation operation directly modifies the `genome` in place. A genome with fewer than
-    /// two genes is left unchanged.
+    /// Varies `genome` in place using this strategy; fewer than two genes are left unchanged.
     #[inline]
     pub fn mutate<G: Copy>(&self, genome: &mut [G], rng: &mut Rng) {
         match self {
@@ -64,18 +38,10 @@ impl MutationStrategy {
     }
 }
 
-/// Exchanges the positions of two randomly chosen genes of the given genome.
+/// Exchanges two distinct positions chosen uniformly from `genome`.
 ///
-/// This mutation operator is effective at making small changes in the solution structure,
-/// allowing for local search and fine-tuning of the solution.
-///
-/// # Arguments
-/// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///   problem space.
-/// * `rng` - A mutable reference to a random number generator
-///
-/// # Note
-/// Swap mutation is applicable to permutation-based problems.
+/// Gene counts are preserved. Genomes with fewer than two genes are unchanged; equal values
+/// at the chosen positions can also leave the genome unchanged.
 ///
 /// # Example
 /// ```
@@ -102,19 +68,10 @@ pub fn swap_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     genome.swap(p1, p2);
 }
 
-/// Shuffles the genes within a randomly selected range, of at least two genes, of the given
-/// genome.
+/// Shuffles a random contiguous range of at least two genes, preserving gene counts.
 ///
-/// This mutation operator is useful for introducing larger-scale changes in the solution,
-/// promoting exploration and diversity in the population.
-///
-/// # Arguments
-/// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///   problem space.
-/// * `rng` - A mutable reference to a random number generator
-///
-/// # Note
-/// Scramble mutation is applicable to permutation-based problems.
+/// Range lengths are uniform, then starts are uniform for the chosen length. Fewer than two
+/// genes are left unchanged, and shuffling can also reproduce the original order.
 ///
 /// # Example
 /// ```
@@ -139,19 +96,10 @@ pub fn scramble_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     rng.shuffle(&mut genome[range]);
 }
 
-/// Reverses the order of the genes within a randomly selected range, of at least two genes, of
-/// the given genome.
+/// Reverses a random contiguous range of at least two genes, preserving gene counts.
 ///
-/// This mutation operator can introduce both small and large changes in the solution, balancing
-/// exploration and exploitation in the search process.
-///
-/// # Arguments
-/// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///   problem space.
-/// * `rng` - A mutable reference to a random number generator
-///
-/// # Note
-/// Inversion mutation is applicable to permutation-based problems.
+/// Range lengths are uniform, then starts are uniform for the chosen length. Genomes with
+/// fewer than two genes are unchanged.
 ///
 /// # Example
 /// ```
@@ -179,16 +127,8 @@ pub fn inversion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
 
 /// Moves one gene to a distinct position before or after it, shifting the intervening genes.
 ///
-/// The mutation operator can introduce a small local rearrangement of genes which can be particularly
-/// useful in permutation-based problems where the relative ordering of genes is important.
-///
-/// # Arguments
-/// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///   problem space.
-/// * `rng` - A mutable reference to a random number generator
-///
-/// # Note
-/// Insertion mutation is applicable to permutation-based problems.
+/// Source and destination form a uniformly chosen ordered pair. Gene counts are preserved,
+/// and genomes with fewer than two genes are unchanged.
 ///
 /// # Example
 /// ```
@@ -223,19 +163,10 @@ pub fn insertion_mutation<G>(genome: &mut [G], rng: &mut Rng) {
     }
 }
 
-/// Selects a gene from a random position in the genome and copies it to another position, replacing
-/// the gene that was previously there.
+/// Copies one gene's value over another, using uniformly chosen distinct positions.
 ///
-/// This mutation operator can introduce variation into the genome, and can be useful in problems where
-/// duplications of certain genes may lead to a better solution.
-///
-/// # Arguments
-/// * `genome` - The sequence of genes to be mutated. This could represent a solution in the
-///   problem space.
-/// * `rng` - A mutable reference to a random number generator
-///
-/// # Note
-/// Duplicate mutation is not applicable to permutation-based problems where each gene should be unique.
+/// This can drop one gene and repeat another, so it does not preserve permutations. Genomes
+/// with fewer than two genes are unchanged.
 ///
 /// # Example
 /// ```

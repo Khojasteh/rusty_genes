@@ -1,6 +1,6 @@
 use super::*;
 
-/// Represents the parameters of an [`AdaptiveGeneticAlgorithm`].
+/// Population size, elite carryover, parent-dependent rates, and selection for an adaptive GA.
 ///
 /// Start with [`Default::default`] and modify fields before passing them to
 /// [`AdaptiveGeneticAlgorithm::new`], which validates them. Stopping belongs to the model's goal
@@ -12,27 +12,19 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct AdaptiveGeneticAlgorithmParameters {
-    /// The number of individuals in a full generation.
+    /// Target number of individuals in a full generation; must be positive.
     ///
-    /// # Note
-    /// `population_size` must be positive. A larger population can improve the diversity of the
-    /// population and reduce the risk of premature convergence, but it also increases the
-    /// computational cost of the algorithm.
+    /// A generation may be smaller when survival cannot supply enough valid, distinct genomes.
     pub population_size: usize,
 
-    /// The proportion of the fittest individuals in the current generation that are directly
-    /// carried over to the next generation.
+    /// Fraction of `population_size` reserved for the fittest current individuals.
     ///
-    /// # Note
-    /// `elitism_rate` must be between 0.0 (inclusive) and 1.0 (exclusive). A value of 0.0 means
-    /// no elitism, i.e. all individuals of the next generation are bred, while a value close to
-    /// 1.0 means that most individuals of the next generation are the fittest ones of the
-    /// current generation. The number of elites is rounded down.
+    /// Must be in `[0, 1)`; the elite count is rounded down. Zero disables explicit elite
+    /// carryover, but the survival policy may still retain parents.
     pub elitism_rate: f64,
 
     /// The crossover rate of two parents the fitter of which has the average score (`k1`).
     ///
-    /// # Note
     /// `crossover_rate` must be between 0.0 and 1.0, inclusive. The rate of parents the fitter of
     /// which is fitter than the average decreases from it in proportion, to 0.0 for parents that
     /// include a fittest individual of the population.
@@ -40,7 +32,6 @@ pub struct AdaptiveGeneticAlgorithmParameters {
 
     /// The crossover rate of two parents that are both less fit than the average (`k3`).
     ///
-    /// # Note
     /// `subaverage_crossover_rate` must be between 0.0 and 1.0, inclusive.
     pub subaverage_crossover_rate: f64,
 
@@ -54,7 +45,6 @@ pub struct AdaptiveGeneticAlgorithmParameters {
     /// The mutation rate of a candidate whose fittest parent is less fit than the average
     /// (`k4`).
     ///
-    /// # Note
     /// `subaverage_mutation_rate` must be between 0.0 and 1.0, inclusive.
     pub subaverage_mutation_rate: f64,
 
@@ -120,7 +110,6 @@ impl AdaptiveGeneticAlgorithmParameters {
 /// The adaptive genetic algorithm of Srinivas and Patnaik, in which each candidate is bred at
 /// rates that depend on the scores of its parents.
 ///
-/// # Note
 /// For a candidate whose fitter parent has the score `f`, in a population whose fittest score is
 /// `fmax` and average score is `favg`:
 ///

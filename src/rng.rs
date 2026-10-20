@@ -8,8 +8,7 @@ use std::ops::{Range, RangeInclusive};
 
 /// The random number generator of the evolutionary algorithms and their operators.
 ///
-/// # Note
-/// The generator is fast but not cryptographically secure. Two generators created from the same
+/// The generator is not cryptographically secure. Two generators created from the same
 /// seed produce the same sequence of values with the same version of this library; the sequence
 /// may change between versions.
 ///
@@ -116,7 +115,7 @@ impl Rng {
     /// Returns a value uniformly distributed in `range`.
     ///
     /// # Panics
-    /// The method panics if `range` is empty.
+    /// Panics if `range` is empty.
     #[inline]
     pub fn random_range(&mut self, range: Range<usize>) -> usize {
         self.0.random_range(range)
@@ -141,8 +140,7 @@ impl Rng {
     }
 }
 
-/// Samples values uniformly from a range of indices that is set up once and sampled many times,
-/// which is faster than [`Rng::random_range`] for repeated sampling.
+/// Reuses a configured uniform index distribution across repeated draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UniformIndices(Uniform<usize>);
 

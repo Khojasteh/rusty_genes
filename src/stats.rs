@@ -1,15 +1,9 @@
-/// The `Stats` struct represents a collection of statistical data derived from
-/// a set of unsorted numerical samples.
+/// A streaming summary of sample extrema, mean, and sample variance, without retaining samples.
 ///
-/// It provides information such as:
-/// - The number of samples (`count`)
-/// - The minimum value (`min`)
-/// - The zero-based index of the minimum value (`arg_min`)
-/// - The maximum value (`max`)
-/// - The zero-based index of the maximum value (`arg_max`)
-/// - The average value (`avg`)
-/// - The variance (`var`)
-/// - The standard deviation (`std`)
+/// Extrema and moments return [`None`] until the first sample. Extrema indices refer to
+/// recording order and keep the first occurrence of a tie. Variance divides by `count - 1`;
+/// a single sample has variance and standard deviation zero. Non-finite samples are not
+/// discarded; use finite inputs for meaningful statistics.
 ///
 /// This struct uses Welford's online algorithm with power-of-two scaling to avoid overflow in
 /// intermediate calculations for finite samples. Variance can still overflow or underflow if
@@ -112,7 +106,7 @@ impl Stats {
         }
     }
 
-    /// Returns the variance of the sample values.
+    /// Returns sample variance using `count - 1`, zero for one sample, or [`None`] when empty.
     #[inline]
     pub fn var(&self) -> Option<f64> {
         match self.count {
@@ -122,7 +116,10 @@ impl Stats {
         }
     }
 
-    /// Returns the standard deviation of the sample values.
+    /// Returns sample standard deviation, zero for one sample, or [`None`] when empty.
+    ///
+    /// It is computed independently of [`var`](Self::var), whose rounding may overflow or
+    /// underflow even when the standard deviation is representable.
     #[inline]
     pub fn std(&self) -> Option<f64> {
         match self.count {
@@ -148,7 +145,7 @@ impl Stats {
         }
     }
 
-    /// Records a new sample and updates all statistical data accordingly.
+    /// Records a sample, assigning it the next zero-based index and updating the summary.
     ///
     /// # Example
     /// ```
@@ -208,12 +205,9 @@ impl Stats {
         }
     }
 
-    /// Returns a snapshot of the [`Stats`] object at its current state, if it is
-    /// not empty.
+    /// Copies the current summary, or returns [`None`] before any sample has been recorded.
     ///
-    /// This can be useful to record the statistics at a certain point in time,
-    /// while allowing the original [`Stats`] object to continue being updated with
-    /// new samples.
+    /// Later calls to [`record`](Self::record) do not change the snapshot.
     ///
     /// # Example
     /// ```
@@ -270,10 +264,11 @@ impl std::fmt::Display for Stats {
     }
 }
 
-/// The [`PopulatedStats`] struct represents a statistical summary of a non-empty
-/// set of numerical samples. This structure is similar to the [`Stats`] struct,
-/// but it contains additional constraints ensuring that the set of samples it
-/// represents is not empty.
+/// A snapshot of a non-empty [`Stats`] summary, with values available without [`Option`].
+///
+/// [`Stats::snapshot`] and conversion from [`Stats`] require at least one sample. Subsequent
+/// recording in the original summary does not change this copy. Variance uses `count - 1`,
+/// with zero variance and standard deviation for one sample.
 ///
 /// # Example
 /// ```
@@ -377,52 +372,38 @@ impl PopulatedStats {
         self.stats.avg().unwrap()
     }
 
-    /// Returns the variance of the sample values.
+    /// Returns sample variance using `count - 1`, or zero for one sample.
     #[inline]
     pub fn var(&self) -> f64 {
         self.stats.var().unwrap()
     }
 
-    /// Returns the standard deviation of the sample values.
+    /// Returns sample standard deviation, or zero for one sample.
     #[inline]
     pub fn std(&self) -> f64 {
         self.stats.std().unwrap()
     }
 
-    /// Updates the `arg_min` value. This method is useful when the order of
-    /// elements in the original sampled data is changed.
+    /// Remaps the minimum's index after the caller reorders the original samples.
     ///
-    /// # Arguments
-    /// * `arg_min` - The new value for `arg_min`, which must be within the bounds
-    ///   of the sampled data.
+    /// Only the index changes; the caller must ensure it still identifies the minimum.
     ///
     /// # Panics
-    /// This method will panic if `arg_min` is out of bounds.
+    /// Panics if `arg_min` is out of bounds.
     ///
-    /// # Note
-    /// This method should be called with caution to ensure that the updated `arg_min`
-    /// value remains valid and consistent with the sampled data.
     #[inline]
     pub fn set_arg_min(&mut self, arg_min: usize) {
         assert!(arg_min < self.count());
         self.stats.arg_min = arg_min;
     }
 
-    /// Updates the `arg_max` value.
+    /// Remaps the maximum's index after the caller reorders the original samples.
     ///
-    /// This method is useful when the order of elements in the original sampled
-    /// data is changed.
-    ///
-    /// # Arguments
-    /// * `arg_max` - The new value for `arg_max`, which must be within the bounds
-    ///   of the sampled data.
+    /// Only the index changes; the caller must ensure it still identifies the maximum.
     ///
     /// # Panics
-    /// This method will panic if `arg_max` is out of bounds.
+    /// Panics if `arg_max` is out of bounds.
     ///
-    /// # Note
-    /// This method should be called with caution to ensure that the updated `arg_max`
-    /// value remains valid and consistent with the sampled data.
     #[inline]
     pub fn set_arg_max(&mut self, arg_max: usize) {
         assert!(arg_max < self.count());
