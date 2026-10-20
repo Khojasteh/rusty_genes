@@ -7,6 +7,30 @@ mod support;
 use rusty_genes::*;
 
 #[test]
+fn bounded_ranges_allow_the_maximum_length() {
+    let mut rng = Rng::from_seed(0);
+    assert_eq!(
+        bounded_random_range(usize::MAX, usize::MAX, usize::MAX, &mut rng),
+        0..usize::MAX
+    );
+    for _ in 0..100 {
+        let range = bounded_random_range(usize::MAX, 1, usize::MAX, &mut rng);
+        assert!(!range.is_empty());
+        assert!(range.start <= range.end);
+    }
+}
+
+#[test]
+fn bounded_ranges_allow_zero_length_at_the_maximum_bound() {
+    let mut rng = Rng::from_seed(0);
+    for _ in 0..100 {
+        let range = bounded_random_range(usize::MAX, 0, 0, &mut rng);
+        assert_eq!(range.start, range.end);
+    }
+    assert_eq!(bounded_random_range(0, 0, 0, &mut rng), 0..0);
+}
+
+#[test]
 fn common_neighbors_handles_small_genomes_symmetrically() {
     assert!(common_neighbors::<u32>(&[], &[]).is_empty());
     assert!(common_neighbors(&[0], &[0]).is_empty());
