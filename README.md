@@ -36,7 +36,7 @@ With Rust 1.85 or later, run this **from a checkout of this repository**:
 cargo run --example one_max
 ```
 
-The [OneMax example](examples/one_max.rs) starts with random strings of 100 bits and searches
+The [OneMax example][one_max] starts with random strings of 100 bits and searches
 for one in which every bit is `1`. Its score is the number of ones, so you know what success
 looks like: a score of 100. The output shows the best score, the number of generations, and
 why the search stopped.
@@ -45,9 +45,9 @@ The examples each show a different representation and algorithm. Read them in th
 
 | Example | What you search for | What it teaches |
 | --- | --- | --- |
-| [OneMax](examples/one_max.rs) | A bit string with as many ones as possible | The basic GA loop, maximization, and a known goal |
-| [Flow shop](examples/flow_shop.rs) | A job order with a short completion time | Permutations, minimization, and adaptive breeding rates |
-| [Curve fitting](examples/curve_fitting.rs) | Four parameters that fit noisy measurements | Real-valued genomes, custom operators, and diversity-guided search |
+| [OneMax][one_max] | A bit string with as many ones as possible | The basic GA loop, maximization, and a known goal |
+| [Flow shop][flow_shop] | A job order with a short completion time | Permutations, minimization, and adaptive breeding rates |
+| [Curve fitting][curve_fitting] | Four parameters that fit noisy measurements | Real-valued genomes, custom operators, and diversity-guided search |
 
 For the larger examples, use a release build:
 
@@ -253,12 +253,18 @@ and survival policies through `Reproduction`, or add local search with `Evolutio
 For control over the steps of each generation, implement `EvolutionAlgorithm`.
 
 The [API documentation](https://docs.rs/rusty_genes) covers the strategies and their parameters,
-and the [changelog](CHANGELOG.md) explains changes between versions.
+and the [changelog][changelog] explains changes between versions.
 
 If you are new to genetic algorithms, start with OneMax, change one setting, and see how the
 search responds. The same building blocks are ready when you move to your own problem.
 
 ## License
 
-RustyGenes is licensed under the [MIT License](LICENSE). The library is still evolving;
+RustyGenes is licensed under the [MIT License][license]. The library is still evolving;
 its API may change between releases.
+
+[one_max]: https://github.com/Khojasteh/rusty_genes/blob/v0.3.0/examples/one_max.rs
+[flow_shop]: https://github.com/Khojasteh/rusty_genes/blob/v0.3.0/examples/flow_shop.rs
+[curve_fitting]: https://github.com/Khojasteh/rusty_genes/blob/v0.3.0/examples/curve_fitting.rs
+[changelog]: https://github.com/Khojasteh/rusty_genes/blob/v0.3.0/CHANGELOG.md
+[license]: https://github.com/Khojasteh/rusty_genes/blob/v0.3.0/LICENSE
