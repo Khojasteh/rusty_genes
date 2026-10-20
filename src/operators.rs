@@ -47,9 +47,15 @@ impl Hasher for GeneHasher {
 
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        for chunk in bytes.chunks(8) {
+        let mut words = bytes.chunks_exact(8);
+        for word in &mut words {
+            let word = word.try_into().expect("a word has 8 bytes");
+            self.add(u64::from_le_bytes(word));
+        }
+        let rest = words.remainder();
+        if !rest.is_empty() {
             let mut word = [0; 8];
-            word[..chunk.len()].copy_from_slice(chunk);
+            word[..rest.len()].copy_from_slice(rest);
             self.add(u64::from_le_bytes(word));
         }
     }
