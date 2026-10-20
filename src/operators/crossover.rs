@@ -1,7 +1,7 @@
 use super::*;
 use std::{hash::Hash, ops::Range};
 
-/// Defines various crossover strategies for combining genetic information of two individuals.
+/// Ways to combine two equal-length parent genomes into one offspring.
 ///
 /// These strategies are mainly applicable to permutation-based problems where each gene in a
 /// genome represents a unique element of the solution. For genomes in which genes repeat, see
@@ -21,12 +21,12 @@ pub enum CrossoverStrategy {
     /// ties and dead ends randomly. See [`edge_recombination_crossover`] (ERX).
     EdgeRecombination,
 
-    /// Partially Mapped Crossover (PMX) is a permutation-based method that creates a mapping
-    /// between the parent genomes to generate a new offspring while preserving relative orderings.
+    /// Copies a random segment from one parent and resolves conflicting genes through a
+    /// mapping to the other parent's segment. See [`partially_mapped_crossover`] (PMX).
     PartiallyMapped,
 
-    /// Order Crossover (OX) is a permutation-based method that preserves the relative order of
-    /// genes from one parent while filling in the gaps with genes from the other parent.
+    /// Copies a random segment from one parent and fills gaps in the other's cyclic order.
+    /// See [`order_crossover`] (OX).
     Order,
 
     /// Takes the cycle through a random position from the first parent and all other positions
@@ -39,17 +39,11 @@ pub enum CrossoverStrategy {
 }
 
 impl CrossoverStrategy {
-    /// Performs a crossover operation between two parent genomes using the selected crossover
-    /// strategy to produce a new offspring.
+    /// Combines equal-length parents, returning an offspring of that length.
     ///
-    /// # Arguments
-    /// * `parent1` - A reference to the first parent's genome.
-    /// * `parent2` - A reference to the second parent's genome.
-    /// * `rng` - A mutable reference to a random number generator.
-    ///
-    /// # Returns
-    /// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-    /// the same as the parents' genomes.
+    /// Empty parents give an empty genome. Except for single-point crossover, parents must be
+    /// permutations of the same distinct genes; use [`crossover_with_repetition`](Self::crossover_with_repetition)
+    /// when copies of a gene have an occurrence order.
     ///
     /// # Panics
     /// Panics if the parent genomes have different lengths. Strategies other than
@@ -264,11 +258,9 @@ where
     for next in offspring.iter_mut().skip(1) {
         visited.insert(current);
 
-        // Find the position of the current gene in each parent genome
         let current_pos1 = positions1[&current];
         let current_pos2 = positions2[&current];
 
-        // Select the next gene in each parent genome
         let next1 = parent1[if current_pos1 + 1 != n {
             current_pos1 + 1
         } else {
@@ -280,24 +272,18 @@ where
             0
         }];
 
-        // Select the next gene in the offspring based on the visited genes and order
-        // of appearance in parent genomes
         let is_next1_visited = visited.contains(&next1);
         let is_next2_visited = visited.contains(&next2);
         *next = if is_next1_visited && is_next2_visited {
-            // Both genes are visited; select the first unvisited one of parent1
             while visited.contains(&parent1[first_unvisited]) {
                 first_unvisited += 1;
             }
             parent1[first_unvisited]
         } else if is_next1_visited {
-            // Gene in parent1 is visited; select parent2's gene
             next2
         } else if is_next2_visited {
-            // Gene in parent2 is visited; select parent1's gene
             next1
         } else {
-            // Both genes are unvisited; select the one that appeared first
             let next1_pos2 = positions2[&next1];
             let next2_pos1 = positions1[&next2];
             if next1_pos2 < next2_pos1 {
@@ -307,13 +293,12 @@ where
             }
         };
 
-        // Set the current gene to the selected next gene
         current = *next;
     }
     offspring
 }
 
-/// Performs an Edge Recombination Crossover (ERX) operation between two parent genomes.
+/// Builds a permutation using the parents' cyclic, undirected neighbor relationships (ERX).
 ///
 /// Edge Recombination Crossover (ERX) creates a neighbor list for each gene from its neighbors in
 /// both parent genomes, treating each genome as a cycle. Starting from `pivot`, it removes the
@@ -435,22 +420,12 @@ where
     offspring
 }
 
-/// Performs a Partially Mapped Crossover (PMX) operation between two parent genomes.
+/// Copies `parent1[range]` and fills other positions from `parent2`, resolving gene conflicts
+/// through the mapping between the parents' selected segments (PMX).
 ///
-/// Partially Mapped Crossover (PMX) creates a mapping between the parent genomes to
-/// generate a new offspring while preserving relative orderings.
-///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-/// * `range` - The range of genes to be mapped from `parent1` to the offspring.
-///
-/// # Returns
-/// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-/// the same as the parents' genomes.
-///
-/// # Note
-/// PMX is applicable to permutation-based problems.
+/// Parents must be permutations of the same distinct genes. The offspring has their length.
+/// An empty range copies `parent2` for genomes of at least two genes; smaller genomes are
+/// copied from `parent1` without using the range.
 ///
 /// # Panics
 /// Panics if the parent genomes have different lengths, if `range` is not within
@@ -482,10 +457,9 @@ where
     let p2 = range.end;
     let mut offspring = vec![parent1[0]; n];
 
-    // Copy the genes from the range in parent1 to the offspring
     offspring[p1..p2].copy_from_slice(&parent1[p1..p2]);
 
-    // Map the remaining genes to the offspring while preserving relative orderings
+    // A gene already in the copied segment must be mapped outside it before filling a gap.
     let start = GenePositions::new(&parent1[p1..p2]);
     let end = &parent2[p1..p2];
     for (i, gene) in offspring.iter_mut().enumerate() {
@@ -509,23 +483,11 @@ where
     offspring
 }
 
-/// Performs an Order Crossover (OX) operation between two parent genomes.
+/// Copies `parent1[range]` and fills the gaps in cyclic order from `parent2` (OX).
 ///
-/// Order Crossover (OX) preserves the relative order of genes from one parent while
-/// filling in the gaps with genes from the other parent.
-///
-/// # Arguments
-/// * `parent1` - A reference to the first parent's genome.
-/// * `parent2` - A reference to the second parent's genome.
-/// * `range` - The range of genes to be copied from `parent1` to the offspring. If the range is
-///   empty, the offspring is a copy of `parent2`.
-///
-/// # Returns
-/// A new `Vec<G>` representing the offspring's genome. The length of this genome will be
-/// the same as the parents' genomes.
-///
-/// # Note
-/// OX is applicable to permutation-based problems.
+/// Parents must be permutations of the same distinct genes. Filling starts just after the
+/// copied segment in both parents, skipping genes already copied. The offspring has the
+/// parents' length; an empty range copies `parent2`.
 ///
 /// # Panics
 /// Panics if the parent genomes have different lengths, if `range` is not
@@ -561,11 +523,9 @@ where
     let p2 = range.end;
     let mut genome = vec![parent1[0]; n];
 
-    // Copy the genes from the range in parent1 to the offspring
     genome[p1..p2].copy_from_slice(&parent1[p1..p2]);
 
-    // Fill the remaining gaps in the offspring with genes from parent2 while preserving
-    // the relative order of genes from parent1
+    // Starting both cursors after the copied segment preserves parent2's cyclic order.
     let copied_genes = GenePositions::new(&parent1[p1..p2]);
     let mut index1 = if p2 != n { p2 } else { 0 };
     let mut index2 = index1;
@@ -597,7 +557,7 @@ where
     genome
 }
 
-/// Performs a Cycle Crossover (CX) operation between two parent genomes.
+/// Takes one cycle of positions from `parent1` and all other positions from `parent2` (CX).
 ///
 /// Cycle Crossover (CX) keeps every gene in the position it has in one of the parents. Starting
 /// at position `start`, it takes the gene of `parent1`, finds the position of that gene in
@@ -655,14 +615,14 @@ where
     panic!("the parents should be permutations of the same genes");
 }
 
-/// Performs a Single-Point Crossover (SPX) operation between two parent genomes.
+/// Joins `parent1` before `point` to `parent2` from `point` onward (SPX).
 ///
 /// A point of zero copies `parent2`; a point at or beyond the end copies `parent1`. The
 /// offspring has the parents' length, but may repeat or omit genes, so this does not preserve
 /// a permutation.
 ///
 /// # Panics
-/// This method will panic if the parent genomes have different lengths.
+/// Panics if the parent genomes have different lengths.
 ///
 /// # Example
 /// ```
@@ -711,16 +671,14 @@ fn positions<G: Copy + Eq + Hash>(genome: &[G]) -> GeneMap<G, usize> {
 
 /// Finds the positions of genes in a genome.
 ///
-/// A short genome is scanned linearly, which is faster than hashing its genes; a longer one is
-/// indexed by a hash map, which keeps each lookup constant-time.
+/// Short genomes are borrowed for scanning; longer ones are indexed by a hash map.
 enum GenePositions<'a, G> {
     Scan(&'a [G]),
     Map(GeneMap<G, usize>),
 }
 
 impl<'a, G: Copy + Eq + Hash> GenePositions<'a, G> {
-    /// The longest genome that is scanned linearly. Measured on 64-bit integer genes, a linear
-    /// scan was faster than hashing up to about 25 to 50 genes.
+    /// The longest genome whose lookups avoid allocating a hash map.
     const SCAN_LIMIT: usize = 32;
 
     fn new(genome: &'a [G]) -> Self {

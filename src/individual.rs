@@ -1,7 +1,7 @@
 use crate::Rng;
 use std::hash::{Hash, Hasher};
 
-/// Represents an individual in a population of an evolutionary algorithm.
+/// A candidate solution with a cached score, genome identity, and validity rule.
 ///
 /// The model's [`objective`](crate::EvolutionModel::objective) determines whether lower or
 /// higher scores are better. The engine evaluates candidates before admitting them to a
@@ -88,7 +88,6 @@ pub trait Individual: Clone + PartialEq + Hash + Send + Sync {
     /// Returns [`true`] if the individual is a valid solution. Invalid individuals never become
     /// part of a [`Population`](crate::Population).
     ///
-    /// # Note
     /// The default implementation considers an individual valid when its score is finite,
     /// i.e. neither infinite nor NaN.
     ///
@@ -100,21 +99,15 @@ pub trait Individual: Clone + PartialEq + Hash + Send + Sync {
     }
 }
 
-/// Represents an individual in a population of an evolutionary algorithm that can be generated
-/// randomly.
+/// Creates starting candidates from problem-specific arguments and the run's randomness.
 ///
-/// The trait is parameterized over a type `A`, which represents domain-specific arguments for
-/// generating the individual, such as the length of its genome.
+/// `A` may describe a genome length, search bounds, or another problem instance.
 pub trait RandomIndividual<A>: Individual {
-    /// Generates a new individual with random characteristics.
+    /// Creates one starting candidate; its score need not have been evaluated.
     ///
-    /// # Arguments
-    /// * `args` - A reference to domain-specific arguments for generating the individual.
-    /// * `rng` - A mutable reference to random number generator.
-    ///
-    /// # Returns
-    /// A new individual whose characteristics are determined by the random number generator and
-    /// the domain-specific arguments.
+    /// [`Evolution::run`](crate::Evolution::run) calls this in parallel with `args` shared and
+    /// an independent `rng` for each candidate, then evaluates the resulting genomes. Use
+    /// `rng` for random choices to preserve seeded reproducibility.
     fn new_random(args: &A, rng: &mut Rng) -> Self;
 }
 

@@ -5,7 +5,6 @@ use rayon::prelude::*;
 /// the operators of an [`EvolutionModel`] into candidates, and lets a [`SurvivalPolicy`] choose
 /// the next generation from the population and the candidates.
 ///
-/// # Note
 /// Each candidate is bred as follows:
 /// 1. Two parents are selected, the second among the other individuals by
 ///    [`Sampler::select_other`]. With the probability of their

@@ -13,9 +13,8 @@ pub use dgga::*;
 /// The type of individual evolved by an evolutionary algorithm `A`.
 pub type IndividualOf<A> = <<A as EvolutionAlgorithm>::Model as EvolutionModel>::Individual;
 
-/// Represents the core mechanism of an evolutionary algorithm.
+/// The steps by which an algorithm builds one generation from the preceding population.
 ///
-/// # Note
 /// This trait defines the steps of a generation: preparing the algorithm, carrying elites over,
 /// breeding offspring, and replacing the population. [`Evolution`] drives these steps from one
 /// generation to the next, so an algorithm is usually run by converting it into an [`Evolution`]
@@ -53,7 +52,6 @@ pub trait EvolutionAlgorithm {
 
     /// Evaluates the starting individuals of a run, without requiring cached scores.
     ///
-    /// # Note
     /// [`Evolution`] then forms the initial [`Population`] from them under the model's
     /// [`objective`](EvolutionModel::objective), discarding invalid individuals. The default
     /// implementation evaluates the score of each individual in parallel.
@@ -66,7 +64,6 @@ pub trait EvolutionAlgorithm {
 
     /// Prepares the algorithm for breeding the next generation from the population of `state`.
     ///
-    /// # Note
     /// This method is called once per generation, before any other step of the generation.
     ///
     /// The algorithm is also responsible for calling [`EvolutionModel::prepare`] on its model.
@@ -76,7 +73,6 @@ pub trait EvolutionAlgorithm {
     /// to `elites`, which is empty and holds at most
     /// [`population_size`](EvolutionAlgorithm::population_size) individuals.
     ///
-    /// # Note
     /// The default implementation adds the fittest individual.
     fn select_elites(
         &self,
@@ -92,7 +88,6 @@ pub trait EvolutionAlgorithm {
     ///
     /// `offspring` may already hold elites; add only as many individuals as its capacity allows.
     ///
-    /// # Note
     /// For a run to be reproducible from its seed, the offspring must depend only on the state
     /// of `rng`, for example by breeding each offspring with its own generator of [`Rng::split`],
     /// as [`Reproduction::breed_into`] does.
@@ -105,7 +100,6 @@ pub trait EvolutionAlgorithm {
 
     /// Replaces the current population with the next generation in `offspring`.
     ///
-    /// # Note
     /// The default implementation replaces the whole population by [`Population::advance`].
     /// [`Evolution`] records the new generation in the [`RunState`] of the run once the
     /// population is replaced.

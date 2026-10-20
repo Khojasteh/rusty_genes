@@ -6,9 +6,8 @@ use std::{
     sync::OnceLock,
 };
 
-/// Represents a population of individuals in an evolutionary algorithm.
+/// A non-empty set of valid, distinct individuals, ranked by their score.
 ///
-/// # Note
 /// A population is never empty, and it holds only valid and distinct individuals, sorted by
 /// their score from worst to best according to its [`objective`](Population::objective).
 /// This is ascending score order for maximization and descending for minimization.
@@ -77,7 +76,7 @@ impl<I: Individual> Population<I> {
         Ok(())
     }
 
-    /// Replaces the current population with the individuals of `generation`, which it leaves
+    /// Replaces the individuals of the population with those of `generation`, which it leaves
     /// empty for the generation after.
     ///
     /// The individuals are sorted as in [`Population::new`].
@@ -101,7 +100,7 @@ impl<I: Individual> Population<I> {
         self.objective
     }
 
-    /// Summarizes the current generation's scores in their original units.
+    /// Summarizes the scores of the population in their original units.
     ///
     /// Minimum and maximum mean the numerical extrema, independently of the objective; use
     /// [`fittest`](Self::fittest) for the best individual under that objective.

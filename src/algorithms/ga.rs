@@ -1,6 +1,6 @@
 use super::*;
 
-/// Represents the parameters of a [`GeneticAlgorithm`].
+/// Population size, elite carryover, breeding rates, and parent selection for a fixed-rate GA.
 ///
 /// Start with [`Default::default`] and modify fields before passing them to
 /// [`GeneticAlgorithm::new`], which validates them. Stopping belongs to the model's goal and
@@ -8,39 +8,21 @@ use super::*;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GeneticAlgorithmParameters {
-    /// The number of individuals in a full generation.
+    /// Target number of individuals in a full generation; must be positive.
     ///
-    /// # Note
-    /// `population_size` must be positive. A larger population can improve the diversity of the
-    /// population and reduce the risk of premature convergence, but it also increases the
-    /// computational cost of the algorithm.
+    /// A generation may be smaller when survival cannot supply enough valid, distinct genomes.
     pub population_size: usize,
 
-    /// The proportion of the fittest individuals in the current generation that are directly
-    /// carried over to the next generation.
+    /// Fraction of `population_size` reserved for the fittest current individuals.
     ///
-    /// # Note
-    /// `elitism_rate` must be between 0.0 (inclusive) and 1.0 (exclusive). A value of 0.0 means
-    /// no elitism, i.e. all individuals of the next generation are bred, while a value close to
-    /// 1.0 means that most individuals of the next generation are the fittest ones of the
-    /// current generation. The number of elites is rounded down.
-    ///
-    /// Elitism preserves the fittest individuals from generation to generation. However, a high
-    /// value may limit the diversity of the population and lead to premature convergence.
+    /// Must be in `[0, 1)`; the elite count is rounded down. Zero disables explicit elite
+    /// carryover, but the survival policy may still retain parents.
     pub elitism_rate: f64,
 
-    /// The probability of two individuals combining their genetic information to produce an
-    /// offspring.
-    ///
-    /// # Note
-    /// `crossover_rate` must be between 0.0 and 1.0, inclusive.
+    /// Probability of crossing two parents instead of copying the first; must be in `[0, 1]`.
     pub crossover_rate: f64,
 
-    /// The probability of an offspring undergoing mutation.
-    ///
-    /// # Note
-    /// `mutation_rate` must be between 0.0 and 1.0, inclusive. A higher value introduces more
-    /// genetic diversity into the population.
+    /// Probability of mutating each candidate, including a copied parent; must be in `[0, 1]`.
     pub mutation_rate: f64,
 
     /// The strategy for selecting parents from the population.

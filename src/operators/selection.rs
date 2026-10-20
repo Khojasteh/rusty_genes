@@ -1,16 +1,10 @@
 use super::*;
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-/// Represents various selection strategies for selecting an individual from the population in
-/// an evolutionary algorithm.
+/// Parent-selection rules for a population ordered from worst to best under its objective.
 ///
-/// # Note
-/// The selection strategy is an important aspect of an evolutionary algorithm. It determines how
-/// individuals are chosen from the population for reproduction and thereby, influences the diversity
-/// and convergence speed of the algorithm.
-///
-/// Each selection strategy has its own strengths and weaknesses, and the choice of strategy can
-/// significantly impact the performance of the evolutionary algorithm.
+/// Tournament and rank-based rules depend only on ordering. Roulette-wheel and Boltzmann
+/// selection derive weights from the numerical scores.
 ///
 /// Every strategy gives individuals with equal scores equal chances of being selected.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -81,8 +75,7 @@ impl SelectionStrategy {
     }
 }
 
-/// Defines the mechanism for selecting an individual from the population in an evolutionary
-/// algorithm.
+/// Builds a population-specific sampler for selecting parents.
 ///
 /// A mechanism selects from a population through the [`Sampler`] it creates for that
 /// population, which holds what the mechanism derives from the population, such as the
@@ -96,7 +89,6 @@ pub trait SelectionMechanism<I: Individual>: Send + Sync {
     /// Creates a sampler that selects individuals of `population`, which is generation number
     /// `generation` of its run.
     ///
-    /// # Note
     /// The algorithms of this library create a sampler for each generation. A mechanism whose
     /// selection changes during a run, such as [`BoltzmannSelection`], changes it by
     /// `generation`, so a new run, which starts at generation zero, selects as if the mechanism
@@ -348,9 +340,8 @@ fn score_groups<I: Individual>(
         })
 }
 
-/// Represents the tournament selection algorithm.
+/// Selects the fittest of a fixed number of uniform draws with replacement.
 ///
-/// # Note
 /// The tournament selection method draws a fixed number of random candidates from the
 /// population, with replacement, and selects the best candidate under its objective. Of
 /// candidates with equal scores, the one drawn first wins, so individuals with equal scores
@@ -520,9 +511,8 @@ impl<I: Individual> SelectionMechanism<I> for RouletteWheelSelection {
     }
 }
 
-/// Represents the Boltzmann selection algorithm used in genetic algorithms.
+/// Selects by exponentially weighted scores at a generation-dependent temperature.
 ///
-/// # Note
 /// In Boltzmann selection, the probability of selecting an individual with score `f` is
 /// proportional to `exp(f / T)`, where `T` is the temperature. A high temperature makes the
 /// probabilities more uniform, which encourages exploration, while a low temperature favors the
@@ -544,7 +534,7 @@ pub struct BoltzmannSelection {
 }
 
 impl BoltzmannSelection {
-    /// Creates a new instance.
+    /// Starts at `temperature` in score units, multiplying it by `cooling_rate` per generation.
     ///
     /// Both values must be positive and finite. A cooling rate below 1 cools, 1 keeps the
     /// temperature fixed, and a value above 1 heats the selection towards uniform probabilities.
@@ -660,9 +650,8 @@ impl<I: Individual> SelectionMechanism<I> for BoltzmannSelection {
     }
 }
 
-/// Represents the rank selection algorithm used in genetic algorithms.
+/// Selects proportionally to fitness rank, sharing tied ranks equally.
 ///
-/// # Note
 /// In rank selection, the probability of selecting an individual is proportional to its rank
 /// in the population sorted by score, where the least fit individual has rank 1 and the
 /// fittest has rank `n`. Individuals with equal scores share the average of their ranks.
@@ -691,17 +680,16 @@ impl<I: Individual> SelectionMechanism<I> for RankSelection {
     }
 }
 
-/// Represents the elitist selection algorithm used in genetic algorithms.
+/// Selects uniformly from the fittest portion, sharing chances across a boundary tie.
 ///
-/// # Note
 /// Elitist selection excludes the least fit portion of the population, given by the ratio, and
 /// selects uniformly among the remaining, fittest individuals. At least the fittest individual
 /// always remains selectable. When individuals with equal scores are on both sides of the
 /// excluded portion, they share the chances of those among them that remain, so each of them is
 /// selectable with an equal, reduced chance.
 ///
-/// Note that using a high ratio in elitist selection may lead to premature convergence and a
-/// loss of population diversity.
+/// A high exclusion ratio leaves fewer distinct parents selectable through
+/// [`Sampler::select`]; [`Sampler::select_other`] still supplies a different parent when possible.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ElitistSelection {
     ratio: f64,
@@ -812,9 +800,8 @@ impl<'a, I: Individual> Sampler<'a, I> for ElitistSampler<'a, I> {
     }
 }
 
-/// Represents the linear ranking selection algorithm used in genetic algorithms.
+/// Selects by a linear rank weight controlled by selective pressure in `[1, 2]`.
 ///
-/// # Note
 /// Linear selection is a variant of rank selection in which the selection probability is a
 /// linear function of the rank, controlled by the selective pressure `s` between 1.0 and 2.0,
 /// inclusive. The fittest individual is `s` times as likely to be selected as an average

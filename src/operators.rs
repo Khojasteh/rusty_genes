@@ -86,14 +86,12 @@ impl Hasher for GeneHasher {
     }
 }
 
-/// Returns a distinct random pair of numbers within the range `[0, n)`.
+/// Uniformly samples an ordered pair of distinct indices in `0..n`.
 ///
-/// # Arguments
-/// * `n` - The upper limit of the range (exclusive).
-/// * `rng` - A mutable reference to a random number generator.
+/// Either index may be the larger one.
 ///
 /// # Panics
-/// The function will panic if `n` is less than 2.
+/// Panics if `n` is less than 2.
 ///
 /// # Example
 /// ```
@@ -119,12 +117,8 @@ pub fn random_pair(n: usize, rng: &mut Rng) -> (usize, usize) {
 /// The length of the range is uniformly distributed between 1 and `n`, and for a given length,
 /// the start of the range is uniformly distributed over the positions the length allows.
 ///
-/// # Arguments
-/// * `n` - The exclusive upper bound for the random range (0..n)
-/// * `rng` - A mutable reference to a random number generator
-///
 /// # Panics
-/// The function will panic if `n` is zero.
+/// Panics if `n` is zero.
 ///
 /// # Example
 /// ```
@@ -146,14 +140,11 @@ pub fn random_range(n: usize, rng: &mut Rng) -> std::ops::Range<usize> {
 /// a given length, the start of the range is uniformly distributed over the positions the length
 /// allows.
 ///
-/// # Arguments
-/// * `n` - The exclusive upper bound for the random range (0..n)
-/// * `min_len` - The minimum length (inclusive) for the random range
-/// * `max_len` - The maximum length (inclusive) for the random range
-/// * `rng` - A mutable reference to a random number generator
+/// A zero length is allowed when `min_len` is zero; its start may be anywhere in `0..=n`.
+/// Bounds may be as large as [`usize::MAX`], including when the length is zero.
 ///
 /// # Panics
-/// The function will panic if `min_len` is larger than `max_len`, or if `max_len` is larger
+/// Panics if `min_len` is larger than `max_len`, or if `max_len` is larger
 /// than `n`.
 ///
 /// # Example
@@ -178,17 +169,11 @@ pub fn bounded_random_range(
     start..end
 }
 
-/// Identifies and returns the common neighboring genes between two genomes.
+/// Returns the undirected neighboring gene pairs shared by two cyclic genomes.
 ///
-/// For each genome, the function identifies neighboring genes, i.e., pairs of genes that are adjacent
-/// in the genome sequence. Then, it returns those neighbors that are exist in both genomes.
-///
-/// # Arguments
-/// * `genome1` - A reference to the first  genome.
-/// * `genome2` - A reference to the second genome.
-///
-/// # Returns
-/// A `Vec<(G, G)>` where each tuple represents a pair of neighboring genes common to both genomes.
+/// The last and first genes are neighbors too, and reversing a pair does not change its
+/// identity. Pairs follow their order in the shorter genome, using `genome1` on equal lengths.
+/// Repeated pairs are not deduplicated. Either input having fewer than two genes gives no pairs.
 ///
 /// # Example
 /// ```
@@ -242,22 +227,11 @@ where
     neighbors1
 }
 
-/// Identifies and returns the common partitions between two genomes.
+/// Groups permutation genes into maximal chains of neighbors shared by both cyclic genomes.
 ///
-/// # Note
-/// A partition is a sequence of genes that is common to both genomes and where
-/// each gene is a neighbor of the next gene in the sequence in both genomes.
-///
-/// # Arguments
-/// * `genome1` - A reference to the first genome.
-/// * `genome2` - A reference to the second genome.
-///
-/// # Returns
-/// A `Vec<Vec<G>>` representing the common partitions found in both parent genomes.
-/// Each partition is a vector of genes, and each gene of `genome1` is in exactly one
-/// partition. A partition extends as far as the common neighbors reach, and its genes are
-/// in the order of that chain, which can run backwards or wrap around the ends of the
-/// genomes, as in the example below.
+/// Each distinct gene of `genome1` belongs to one partition. Its chain can run backwards or
+/// wrap around a genome's ends because [`common_neighbors`] treats links as undirected.
+/// Genomes with no common links give single-gene partitions; an empty `genome1` gives none.
 ///
 /// # Example
 /// ```

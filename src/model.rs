@@ -1,7 +1,6 @@
 use super::*;
 
-/// The `EvolutionModel` trait describes a specific optimization problem to an evolutionary
-/// algorithm.
+/// The problem-specific representation, operators, and scoring rule used by an algorithm.
 ///
 /// The model defines the problem-specific parts of an evolutionary algorithm: the individuals,
 /// and the operators that combine (crossover), vary (mutation), refine (local search), and
@@ -38,15 +37,11 @@ pub trait EvolutionModel: Sync {
         None
     }
 
-    /// Creates an offspring by combining the genetic information of two individuals.
+    /// Combines two parents into a new candidate, which need not have an evaluated score.
     ///
-    /// # Arguments
-    /// * `parent1` - The first parent individual.
-    /// * `parent2` - The second parent individual.
-    /// * `rng` - A mutable reference to a random number generator.
-    ///
-    /// # Returns
-    /// The new offspring individual that combines the genetic information of the parents.
+    /// [`Reproduction`] calls this with distinct parents, then improves and evaluates the
+    /// candidate before its survival policy considers it. Use only `rng` for random choices
+    /// when the run must be reproducible from its seed.
     fn crossover(
         &self,
         parent1: &Self::Individual,
@@ -54,15 +49,12 @@ pub trait EvolutionModel: Sync {
         rng: &mut Rng,
     ) -> Self::Individual;
 
-    /// Mutates the genetic information of an individual in place, in order to introduce
-    /// variation into the population.
+    /// Varies a candidate in place to explore solutions that crossover alone may not produce.
     ///
-    /// # Arguments
-    /// * `individual` - The individual to mutate.
-    /// * `rng` - A mutable reference to a random number generator.
+    /// The engine evaluates it afterward; its cached score may be stale during mutation.
     fn mutate(&self, individual: &mut Self::Individual, rng: &mut Rng);
 
-    /// Improves an individual by a local search.
+    /// Optionally refines a candidate by local search before its final evaluation.
     ///
     /// [`Reproduction`] calls this on every candidate, including copied parents, after any
     /// mutation. Its score may be stale or invalid at this point; a search that uses scores
@@ -71,10 +63,6 @@ pub trait EvolutionModel: Sync {
 
     /// Computes and caches the score that [`Individual::score`] will return.
     ///
-    /// # Arguments
-    /// * `individual` - The individual to evaluate.
-    ///
-    /// # Note
     /// Store the score in the problem's own units. Whether lower or higher scores are better
     /// is determined by [`objective`](Self::objective). An individual that is not a valid
     /// solution should be evaluated in a way that makes
@@ -91,7 +79,6 @@ pub trait EvolutionModel: Sync {
 
     /// Prepares the model for breeding the next generation from the population of `state`.
     ///
-    /// # Note
     /// The algorithms of this library call this method once per generation, before breeding.
     /// A model may use it to adapt its own state, such as the strength of its mutation, to the
     /// population or the progress of the run. The default implementation performs no
