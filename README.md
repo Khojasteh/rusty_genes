@@ -38,8 +38,8 @@ feature.
 
 The [OneMax example](examples/one_max.rs) evolves strings of bits towards one in which every bit
 is `1`. Its score is the number of set bits, so a 100-bit solution has a maximum score of 100.
-The example defines the problem's individual and model, and runs the genetic algorithm on them
-with the default parameters:
+The example defines the problem's individual and model, and runs the standard genetic algorithm
+on them with its default parameters, which select parents by tournaments of three:
 
 ```sh
 cargo run --example one_max
@@ -130,9 +130,7 @@ impl EvolutionModel for Sorting {
     }
 }
 
-let mut parameters = GeneticAlgorithmParameters::default();
-parameters.selection_strategy = SelectionStrategy::Tournament(3);
-let mut evolution = GeneticAlgorithm::new(Sorting, parameters)
+let mut evolution = GeneticAlgorithm::new(Sorting, Default::default())
     .expect("the parameters are valid")
     .into_evolution();
 let limits = Limits::new().generations(100);

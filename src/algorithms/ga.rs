@@ -55,14 +55,14 @@ impl Default for GeneticAlgorithmParameters {
     /// * elitism_rate: 0.01
     /// * crossover_rate: 0.8
     /// * mutation_rate: 0.1
-    /// * selection_strategy: [`SelectionStrategy::RouletteWheel`]
+    /// * selection_strategy: [`SelectionStrategy::Tournament(3)`](SelectionStrategy::Tournament)
     fn default() -> Self {
         Self {
             population_size: 100,
             elitism_rate: 0.01,
             crossover_rate: 0.8,
             mutation_rate: 0.1,
-            selection_strategy: SelectionStrategy::RouletteWheel,
+            selection_strategy: SelectionStrategy::Tournament(3),
         }
     }
 }
