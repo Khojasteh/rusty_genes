@@ -4,7 +4,7 @@ use rand::{
     rngs::Xoshiro256PlusPlus,
     seq::{IndexedRandom, SliceRandom},
 };
-use std::ops::Range;
+use std::ops::{Range, RangeInclusive};
 
 /// The random number generator of the evolutionary algorithms and their operators.
 ///
@@ -119,6 +119,12 @@ impl Rng {
     /// The method panics if `range` is empty.
     #[inline]
     pub fn random_range(&mut self, range: Range<usize>) -> usize {
+        self.0.random_range(range)
+    }
+
+    /// Samples inclusive index bounds without requiring a representable exclusive end.
+    #[inline]
+    pub(crate) fn random_range_inclusive(&mut self, range: RangeInclusive<usize>) -> usize {
         self.0.random_range(range)
     }
 

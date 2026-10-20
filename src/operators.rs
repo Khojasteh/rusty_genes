@@ -172,8 +172,8 @@ pub fn bounded_random_range(
 ) -> std::ops::Range<usize> {
     assert!(min_len <= max_len && max_len <= n);
 
-    let length = rng.random_range(min_len..max_len + 1);
-    let start = rng.random_range(0..n - length + 1);
+    let length = rng.random_range_inclusive(min_len..=max_len);
+    let start = rng.random_range_inclusive(0..=n - length);
     let end = start + length;
     start..end
 }
